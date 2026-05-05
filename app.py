@@ -40,7 +40,7 @@ async def upload_template(request: Request):
         response = requests.get(file_url)
         response.raise_for_status()
 
-        filename = file_url.split("/")[-1]
+        filename = file_url.split("/")[-1].split("?")[0]
         path = os.path.join("templates", filename)
 
         with open(path, "wb") as f:
