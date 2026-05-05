@@ -10,10 +10,11 @@ import requests
 
 app = FastAPI()
 
-@app.get("/")
-def test():
-    return {"message": "бот работает"}
+from fastapi.responses import PlainTextResponse
 
+@app.get("/", response_class=PlainTextResponse)
+def test():
+    return "бот работает"
 # ------------------ Директории ------------------
 TEMP_DIR = "temp"
 OUTPUT_DIR = "output"
