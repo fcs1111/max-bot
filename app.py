@@ -21,19 +21,16 @@ def test():
 async def upload_template(request: Request):
     data = await request.json()
 
-    print("INCOMING:", data)  # 🔥 теперь увидим что приходит
+    print("INCOMING:", data)
 
-    # пробуем разные варианты (Watbot может слать по-разному)
     file_url = None
 
-    if "file" in data:
-        file_url = data["file"]
+    # 👇 ищем файл в variables
+    variables = data.get("variables", [])
 
-    elif "file_url" in data:
-        file_url = data["file_url"]
-
-    elif "contact" in data:
-        file_url = data["contact"].get("last_file_url")
+    for var in variables:
+        if var.get("name") == "file":
+            file_url = var.get("value")
 
     if not file_url:
         return {"message": f"Файл не найден. Пришло: {data}"}
@@ -43,7 +40,7 @@ async def upload_template(request: Request):
         response.raise_for_status()
 
         filename = file_url.split("/")[-1]
-        path = os.path.join(TEMPLATES_DIR, filename)
+        path = os.path.join("templates", filename)
 
         with open(path, "wb") as f:
             f.write(response.content)
@@ -51,4 +48,4 @@ async def upload_template(request: Request):
         return {"message": f"Шаблон {filename} загружен"}
 
     except Exception as e:
-        return {"message": f"Ошибка загрузки: {str(e)}"}
+        return {"message": f"Ошибка: {str(e)}"}
