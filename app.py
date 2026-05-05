@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Request
 from fastapi.responses import FileResponse, JSONResponse
 import pandas as pd
 from pptx import Presentation
@@ -6,6 +6,7 @@ import os
 import zipfile
 import shutil
 import uuid
+import requests
 
 app = FastAPI()
 
@@ -15,10 +16,51 @@ OUTPUT_DIR = "output"
 os.makedirs(TEMP_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# временное хранилище пользователей
 sessions = {}
 
+# 🔐 ВСТАВЬ СЮДА ТОКЕН (НО ПОТОМ ЛУЧШЕ В ENV)
+TOKEN = "f9LHodD0cOIivtqm-8fTlt28_L0RokxyCNiOPUhjiWD2JxYKIIxDgLLUOFKGnUujUpEP63GWeppEZH302YfZ"
 
+
+# ================== ОТПРАВКА СООБЩЕНИЯ ==================
+def send_message(chat_id, text):
+    url = "https://platform-api.max.ru/messages"
+
+    headers = {
+        "Authorization": f"Bearer {TOKEN}"
+    }
+
+    data = {
+        "chat_id": chat_id,
+        "text": text
+    }
+
+    requests.post(url, json=data, headers=headers)
+
+
+# ================== WEBHOOK ==================
+@app.post("/webhook")
+async def webhook(request: Request):
+    data = await request.json()
+    print(data)
+
+    message = data.get("message", {})
+    text = message.get("text", "")
+    chat_id = message.get("chat_id")
+
+    if not chat_id:
+        return {"status": "no chat_id"}
+
+    # простая логика
+    if text == "/start":
+        send_message(chat_id, "Привет! Отправь шаблон PPTX")
+    else:
+        send_message(chat_id, f"Ты написал: {text}")
+
+    return {"status": "ok"}
+
+
+# ================== ЗАГРУЗКА ШАБЛОНА ==================
 @app.post("/upload_template")
 async def upload_template(file: UploadFile = File(...)):
     user_id = str(uuid.uuid4())
@@ -33,6 +75,7 @@ async def upload_template(file: UploadFile = File(...)):
     return {"user_id": user_id, "message": "Шаблон загружен"}
 
 
+# ================== ЗАГРУЗКА EXCEL ==================
 @app.post("/upload_excel")
 async def upload_excel(user_id: str, file: UploadFile = File(...)):
     if user_id not in sessions:
@@ -48,6 +91,7 @@ async def upload_excel(user_id: str, file: UploadFile = File(...)):
     return {"message": "Excel загружен"}
 
 
+# ================== ГЕНЕРАЦИЯ ==================
 @app.post("/generate")
 async def generate(user_id: str):
     if user_id not in sessions:
