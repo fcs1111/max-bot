@@ -53,23 +53,24 @@ async def upload_template(request: Request):
 
 @app.post("/upload_excel")
 async def upload_excel(request: Request):
-    data = await request.json()
-
-    print("INCOMING EXCEL:", data)
-
-    variables = data.get("variables", [])
-
-    file_url = None
-
-    for var in variables:
-        if var.get("name") == "file":
-            payload = var.get("payload", {})
-            file_url = payload.get("url")
-
-    if not file_url:
-        return {"message": "Excel не найден"}
-
     try:
+        data = await request.json()
+        print("DATA:", data)
+
+        variables = data.get("variables", [])
+
+        file_url = None
+
+        for var in variables:
+            if var.get("name") == "file":
+                payload = var.get("payload", {})
+                file_url = payload.get("url")
+
+        print("FILE URL:", file_url)
+
+        if not file_url:
+            return {"message": "Excel не найден"}
+
         response = requests.get(file_url)
         response.raise_for_status()
 
@@ -82,4 +83,5 @@ async def upload_excel(request: Request):
         return {"message": f"Excel {filename} загружен"}
 
     except Exception as e:
+        print("ERROR:", str(e))
         return {"message": f"Ошибка: {str(e)}"}
