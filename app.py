@@ -30,7 +30,8 @@ async def upload_template(request: Request):
 
     for var in variables:
         if var.get("name") == "file":
-            file_url = var.get("value")
+    payload = var.get("payload", {})
+    file_url = payload.get("url")
 
     if not file_url:
         return {"message": f"Файл не найден. Пришло: {data}"}
