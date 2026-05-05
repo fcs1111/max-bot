@@ -16,24 +16,29 @@ def test():
 
 
 # загрузка шаблона
+from fastapi import FastAPI, Request
+import requests
+import os
+
+app = FastAPI()
+
+os.makedirs("templates", exist_ok=True)
+
 @app.post("/upload_template")
-async def upload_template(file_url: str = Form(...)):
-    try:
-        # скачиваем файл по ссылке
-        response = requests.get(file_url)
-        response.raise_for_status()
+async def upload_template(request: Request):
+    data = await request.json()
 
-        # имя файла
-        filename = file_url.split("/")[-1]
+    file_url = data.get("contact", {}).get("last_file_url")
 
-        # путь сохранения
-        path = os.path.join(TEMPLATES_DIR, filename)
+    if not file_url:
+        return {"message": "Файл не найден"}
 
-        # сохраняем файл
-        with open(path, "wb") as f:
-            f.write(response.content)
+    response = requests.get(file_url)
 
-        return {"message": f"Шаблон {filename} загружен"}
+    filename = file_url.split("/")[-1]
+    path = os.path.join("templates", filename)
 
-    except Exception as e:
-        return {"message": f"Ошибка загрузки: {str(e)}"}
+    with open(path, "wb") as f:
+        f.write(response.content)
+
+    return {"message": f"Шаблон {filename} загружен"}
