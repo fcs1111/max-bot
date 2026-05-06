@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, FileResponse
 import requests
 import os
 import pandas as pd
@@ -260,9 +260,11 @@ async def generate(request: Request):
             generated_files.append(output_file)
 
         # zip
+        zip_filename = f"{user_id}_result.zip"
+
         zip_path = os.path.join(
             OUTPUT_DIR,
-            f"{user_id}_result.zip"
+            zip_filename
         )
 
         with zipfile.ZipFile(zip_path, "w") as zipf:
@@ -274,8 +276,14 @@ async def generate(request: Request):
                     os.path.basename(file)
                 )
 
+        # ссылка на скачивание
+        download_url = (
+            "https://web-production-a9964.up.railway.app"
+            f"/download/{zip_filename}"
+        )
+
         return {
-            "message": f"ZIP готов: {zip_path}"
+            "message": download_url
         }
 
     except Exception as e:
@@ -285,3 +293,27 @@ async def generate(request: Request):
         return {
             "message": f"Ошибка генерации: {str(e)}"
         }
+
+# =========================================================
+# СКАЧИВАНИЕ ZIP
+# =========================================================
+
+@app.get("/download/{filename}")
+async def download_file(filename: str):
+
+    file_path = os.path.join(
+        OUTPUT_DIR,
+        filename
+    )
+
+    if not os.path.exists(file_path):
+
+        return {
+            "message": "Файл не найден"
+        }
+
+    return FileResponse(
+        path=file_path,
+        filename=filename,
+        media_type="application/zip"
+    )
