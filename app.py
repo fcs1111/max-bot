@@ -1,37 +1,143 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import PlainTextResponse, FileResponse
+from fastapi.responses import PlainTextResponse
+from fastapi.staticfiles import StaticFiles
+
 import requests
 import os
-import glob
 import pandas as pd
 from pptx import Presentation
 import zipfile
+import shutil
 
 app = FastAPI()
 
-# =========================================================
-# ПАПКИ
-# =========================================================
+# ------------------ НАСТРОЙКИ ------------------
+
+BASE_URL = "https://ТВОЙ-ПРОЕКТ.up.railway.app"
 
 TEMPLATES_DIR = "templates"
 EXCEL_DIR = "excel"
 OUTPUT_DIR = "output"
+STATE_DIR = "state"
 
 os.makedirs(TEMPLATES_DIR, exist_ok=True)
 os.makedirs(EXCEL_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(STATE_DIR, exist_ok=True)
 
-# =========================================================
-# ТЕСТ
-# =========================================================
+# статические файлы
+app.mount("/files", StaticFiles(directory=OUTPUT_DIR), name="files")
+
+# ------------------ TEST ------------------
 
 @app.get("/", response_class=PlainTextResponse)
 def test():
     return "бот работает"
 
-# =========================================================
-# ЗАГРУЗКА ШАБЛОНА
-# =========================================================
+# ------------------ СКАЧИВАНИЕ ФАЙЛА ------------------
+
+def download_file(file_url, save_dir):
+
+    response = requests.get(file_url)
+
+    filename = file_url.split("/")[-1].split("?")[0]
+
+    path = os.path.join(save_dir, filename)
+
+    with open(path, "wb") as f:
+        f.write(response.content)
+
+    return filename, path
+
+# ------------------ ГЕНЕРАЦИЯ PPTX ------------------
+
+def generate_pptx(template_path, excel_path, user_id):
+
+    user_output_dir = os.path.join(
+        OUTPUT_DIR,
+        user_id
+    )
+
+    # очистка старых файлов
+    if os.path.exists(user_output_dir):
+        shutil.rmtree(user_output_dir)
+
+    os.makedirs(user_output_dir, exist_ok=True)
+
+    # читаем excel
+    df = pd.read_excel(excel_path)
+
+    generated_files = []
+
+    for index, row in df.iterrows():
+
+        prs = Presentation(template_path)
+
+        for slide in prs.slides:
+
+            for shape in slide.shapes:
+
+                if not hasattr(shape, "text"):
+                    continue
+
+                text = shape.text
+
+                # замена плейсхолдеров
+                for col in df.columns:
+
+                    placeholder = str(col).strip()
+                    value = str(row[col])
+
+                    text = text.replace(
+                        placeholder,
+                        value
+                    )
+
+                shape.text = text
+
+        # имя файла
+        if "Название" in df.columns:
+            safe_name = str(row["Название"])
+        else:
+            safe_name = f"file_{index + 1}"
+
+        # очистка имени
+        bad_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
+
+        for char in bad_chars:
+            safe_name = safe_name.replace(char, "")
+
+        pptx_filename = f"{safe_name}.pptx"
+
+        pptx_path = os.path.join(
+            user_output_dir,
+            pptx_filename
+        )
+
+        prs.save(pptx_path)
+
+        generated_files.append(pptx_path)
+
+    # создаем zip
+    zip_name = f"{user_id}_result.zip"
+
+    zip_path = os.path.join(
+        OUTPUT_DIR,
+        zip_name
+    )
+
+    with zipfile.ZipFile(zip_path, "w") as zipf:
+
+        for file in generated_files:
+
+            zipf.write(
+                file,
+                arcname=os.path.basename(file)
+            )
+
+    return zip_name
+
+# ------------------ ЗАГРУЗКА ШАБЛОНА ------------------
 
 @app.post("/upload_template")
 async def upload_template(request: Request):
@@ -40,23 +146,27 @@ async def upload_template(request: Request):
 
         data = await request.json()
 
-        print("UPLOAD TEMPLATE DATA:", data)
+        print("UPLOAD TEMPLATE DATA:")
+        print(data)
 
-        variables = data.get("variables", [])
+        variables = data.get("variables") or []
+        contact = data.get("contact") or {}
+
+        user_id = str(contact.get("id"))
 
         file_url = None
 
-        for var in variables:
+        # БЕРЕМ ПОСЛЕДНИЙ ФАЙЛ
+        for var in reversed(variables):
 
-            payload = var.get("payload", {})
-
-            if not isinstance(payload, dict):
+            if not var:
                 continue
 
-            mime_type = payload.get("mime_type", "")
-            url = payload.get("url", "")
+            payload = var.get("payload") or {}
 
-            if "presentation" in mime_type:
+            url = payload.get("url")
+
+            if url:
 
                 file_url = url
                 break
@@ -64,36 +174,34 @@ async def upload_template(request: Request):
         if not file_url:
 
             return PlainTextResponse(
-                "Файл шаблона не найден"
+                "PPTX файл не найден"
             )
 
-        response = requests.get(file_url)
-        response.raise_for_status()
-
-        filename = "template.pptx"
-
-        file_path = os.path.join(
-            TEMPLATES_DIR,
-            filename
+        filename, template_path = download_file(
+            file_url,
+            TEMPLATES_DIR
         )
 
-        with open(file_path, "wb") as f:
-            f.write(response.content)
+        # сохраняем шаблон пользователя
+        state_file = os.path.join(
+            STATE_DIR,
+            f"{user_id}.txt"
+        )
+
+        with open(state_file, "w", encoding="utf-8") as f:
+            f.write(template_path)
 
         return PlainTextResponse(
-            "Шаблон загружен ✅"
+            "Шаблон загружен ✅\n\nТеперь отправь Excel файл (.xlsx)"
         )
 
     except Exception as e:
 
-        print("UPLOAD TEMPLATE ERROR:", str(e))
-
         return PlainTextResponse(
-            f"Ошибка: {str(e)}"
+            f"Ошибка upload_template:\n{str(e)}"
         )
-# =========================================================
-# ЗАГРУЗКА EXCEL
-# =========================================================
+
+# ------------------ ЗАГРУЗКА EXCEL ------------------
 
 @app.post("/upload_excel")
 async def upload_excel(request: Request):
@@ -102,23 +210,42 @@ async def upload_excel(request: Request):
 
         data = await request.json()
 
-        print("UPLOAD EXCEL DATA:", data)
+        print("UPLOAD EXCEL DATA:")
+        print(data)
 
-        variables = data.get("variables", [])
+        variables = data.get("variables") or []
+        contact = data.get("contact") or {}
+
+        user_id = str(contact.get("id"))
+
+        # проверяем шаблон
+        state_file = os.path.join(
+            STATE_DIR,
+            f"{user_id}.txt"
+        )
+
+        if not os.path.exists(state_file):
+
+            return PlainTextResponse(
+                "Сначала загрузи шаблон"
+            )
+
+        with open(state_file, "r", encoding="utf-8") as f:
+            template_path = f.read()
 
         file_url = None
 
-        for var in variables:
+        # БЕРЕМ ПОСЛЕДНИЙ ФАЙЛ
+        for var in reversed(variables):
 
-            payload = var.get("payload", {})
-
-            if not isinstance(payload, dict):
+            if not var:
                 continue
 
-            mime_type = payload.get("mime_type", "")
-            url = payload.get("url", "")
+            payload = var.get("payload") or {}
 
-            if "spreadsheet" in mime_type:
+            url = payload.get("url")
+
+            if url:
 
                 file_url = url
                 break
@@ -129,172 +256,29 @@ async def upload_excel(request: Request):
                 "Excel файл не найден"
             )
 
-        response = requests.get(file_url)
-        response.raise_for_status()
-
-        filename = "data.xlsx"
-
-        file_path = os.path.join(
-            EXCEL_DIR,
-            filename
+        filename, excel_path = download_file(
+            file_url,
+            EXCEL_DIR
         )
 
-        with open(file_path, "wb") as f:
-            f.write(response.content)
-
-        return PlainTextResponse(
-            "Excel загружен ✅"
-        )
-
-    except Exception as e:
-
-        print("UPLOAD EXCEL ERROR:", str(e))
-
-        return PlainTextResponse(
-            f"Ошибка: {str(e)}"
-        )
-
-# =========================================================
-# ГЕНЕРАЦИЯ
-# =========================================================
-
-@app.post("/generate")
-async def generate():
-
-    try:
-
-        # берем последний шаблон
-        template_files = sorted(
-            glob.glob("templates/*.pptx"),
-            key=os.path.getmtime
-        )
-
-        if not template_files:
-
-            return PlainTextResponse(
-                "Сначала загрузи шаблон"
-            )
-
-        latest_template = template_files[-1]
-
-        # берем последний excel
-        excel_files = sorted(
-            glob.glob("excel/*.xlsx"),
-            key=os.path.getmtime
-        )
-
-        if not excel_files:
-
-            return PlainTextResponse(
-                "Excel не найден"
-            )
-
-        latest_excel = excel_files[-1]
-
-        # читаем excel
-        df = pd.read_excel(latest_excel)
-
-        generated_files = []
+        print("EXCEL PATH:")
+        print(excel_path)
 
         # генерация
-        for _, row in df.iterrows():
-
-            prs = Presentation(latest_template)
-
-            for slide in prs.slides:
-
-                for shape in slide.shapes:
-
-                    if not shape.has_text_frame:
-                        continue
-
-                    for paragraph in shape.text_frame.paragraphs:
-
-                        text = paragraph.text
-
-                        # замена плейсхолдеров
-                        for col in df.columns:
-
-                            placeholder = f"%{col}%"
-
-                            if placeholder in text:
-
-                                text = text.replace(
-                                    placeholder,
-                                    str(row[col])
-                                )
-
-                        paragraph.text = text
-
-            # имя файла
-            safe_name = str(
-                row[df.columns[0]]
-            ).replace("/", "").replace("\\", "")
-
-            output_file = os.path.join(
-                OUTPUT_DIR,
-                f"{safe_name}.pptx"
-            )
-
-            prs.save(output_file)
-
-            generated_files.append(output_file)
-
-        # создаем zip
-        zip_filename = "result.zip"
-
-        zip_path = os.path.join(
-            OUTPUT_DIR,
-            zip_filename
+        zip_name = generate_pptx(
+            template_path=template_path,
+            excel_path=excel_path,
+            user_id=user_id
         )
 
-        with zipfile.ZipFile(zip_path, "w") as zipf:
+        full_url = f"{BASE_URL}/files/{zip_name}"
 
-            for file in generated_files:
-
-                zipf.write(
-                    file,
-                    os.path.basename(file)
-                )
-
-        # ссылка
-        download_url = (
-            "https://web-production-a9964.up.railway.app"
-            "/download/result.zip"
-        )
-
-        return PlainTextResponse(
-            f"ZIP готов ✅\n{download_url}"
-        )
+        return {
+            "message": f"Файлы готовы ✅\n{full_url}"
+        }
 
     except Exception as e:
 
-        print("GENERATE ERROR:", str(e))
-
         return PlainTextResponse(
-            f"Ошибка генерации: {str(e)}"
+            f"Ошибка сервера:\n{str(e)}"
         )
-
-# =========================================================
-# СКАЧИВАНИЕ ZIP
-# =========================================================
-
-@app.get("/download/{filename}")
-async def download_file(filename: str):
-
-    file_path = os.path.join(
-        OUTPUT_DIR,
-        filename
-    )
-
-    if not os.path.exists(file_path):
-
-        return PlainTextResponse(
-            "Файл не найден"
-        )
-
-    return FileResponse(
-        path=file_path,
-        filename=filename,
-        media_type="application/zip"
-    )
