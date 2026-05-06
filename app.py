@@ -156,7 +156,7 @@ async def upload_template(request: Request):
 
         file_url = None
 
-        # БЕРЕМ ПОСЛЕДНИЙ PPTX ФАЙЛ
+        # БЕРЕМ ПОСЛЕДНИЙ ФАЙЛ
         for var in reversed(variables):
 
             if not var:
@@ -165,12 +165,6 @@ async def upload_template(request: Request):
             payload = var.get("payload") or {}
 
             url = payload.get("url")
-
-            name = var.get("name", "")
-
-            # только pptx
-            if not name.lower().endswith(".pptx"):
-                continue
 
             if url:
 
@@ -241,7 +235,7 @@ async def upload_excel(request: Request):
 
         file_url = None
 
-        # БЕРЕМ ПОСЛЕДНИЙ EXCEL ФАЙЛ
+        # БЕРЕМ ПОСЛЕДНИЙ ФАЙЛ
         for var in reversed(variables):
 
             if not var:
@@ -250,15 +244,6 @@ async def upload_excel(request: Request):
             payload = var.get("payload") or {}
 
             url = payload.get("url")
-
-            name = var.get("name", "")
-
-            # только excel
-            if not (
-                name.lower().endswith(".xlsx")
-                or name.lower().endswith(".xls")
-            ):
-                continue
 
             if url:
 
