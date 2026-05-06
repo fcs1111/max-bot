@@ -156,19 +156,19 @@ async def upload_template(request: Request):
 
         file_url = None
 
-        # ИЩЕМ ИМЕННО PPTX
-        for var in variables:
+        # БЕРЕМ ПОСЛЕДНИЙ PPTX ФАЙЛ
+        for var in reversed(variables):
 
             if not var:
                 continue
 
             payload = var.get("payload") or {}
-            meta = var.get("meta") or {}
 
             url = payload.get("url")
-            name = meta.get("name", "")
 
-            # пропускаем всё кроме pptx
+            name = var.get("name", "")
+
+            # только pptx
             if not name.lower().endswith(".pptx"):
                 continue
 
@@ -183,16 +183,12 @@ async def upload_template(request: Request):
                 "PPTX файл не найден"
             )
 
-        # скачиваем pptx
         filename, template_path = download_file(
             file_url,
             TEMPLATES_DIR
         )
 
-        print("TEMPLATE PATH:")
-        print(template_path)
-
-        # сохраняем путь к шаблону
+        # сохраняем шаблон пользователя
         state_file = os.path.join(
             STATE_DIR,
             f"{user_id}.txt"
@@ -207,12 +203,10 @@ async def upload_template(request: Request):
 
     except Exception as e:
 
-        print("UPLOAD TEMPLATE ERROR:")
-        print(str(e))
-
         return PlainTextResponse(
             f"Ошибка upload_template:\n{str(e)}"
         )
+
 # ------------------ ЗАГРУЗКА EXCEL ------------------
 
 @app.post("/upload_excel")
@@ -247,7 +241,7 @@ async def upload_excel(request: Request):
 
         file_url = None
 
-        # БЕРЕМ ПОСЛЕДНИЙ ФАЙЛ
+        # БЕРЕМ ПОСЛЕДНИЙ EXCEL ФАЙЛ
         for var in reversed(variables):
 
             if not var:
@@ -256,6 +250,15 @@ async def upload_excel(request: Request):
             payload = var.get("payload") or {}
 
             url = payload.get("url")
+
+            name = var.get("name", "")
+
+            # только excel
+            if not (
+                name.lower().endswith(".xlsx")
+                or name.lower().endswith(".xls")
+            ):
+                continue
 
             if url:
 
