@@ -28,10 +28,6 @@ os.makedirs(STATE_DIR, exist_ok=True)
 # static files
 app.mount("/files", StaticFiles(directory=OUTPUT_DIR), name="files")
 
-# ------------------ ПАМЯТЬ ШАБЛОНОВ ------------------
-
-templates_db = {}
-
 # ------------------ TEST ------------------
 
 @app.get("/", response_class=PlainTextResponse)
@@ -107,7 +103,7 @@ def generate_pptx(template_path, excel_path, user_id):
         if "Название" in df.columns:
             safe_name = str(row["Название"])
         else:
-            safe_name = str(row[df.columns[0]])
+            safe_name = f"file_{_+1}"
 
         # очистка имени
         bad_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
@@ -167,105 +163,27 @@ async def upload_template(request: Request):
             file_url = payload.get("url")
 
     if not file_url:
+
         return PlainTextResponse(
             "Файл не найден"
         )
 
-    filename, path = download_file(
+    filename, template_path = download_file(
         file_url,
         TEMPLATES_DIR
     )
 
-    if user_id not in templates_db:
-        templates_db[user_id] = []
-
-    templates_db[user_id].append({
-        "name": filename,
-        "path": path
-    })
-
-    return PlainTextResponse(
-        f"Шаблон загружен ✅\n\n{filename}"
-    )
-
-# ------------------ СПИСОК ШАБЛОНОВ ------------------
-
-@app.post("/get_templates")
-async def get_templates(request: Request):
-
-    data = await request.json()
-
-    contact = data.get("contact", {})
-    user_id = str(contact.get("id"))
-
-    user_templates = templates_db.get(user_id, [])
-
-    if not user_templates:
-
-        return PlainTextResponse(
-            "У тебя пока нет шаблонов"
-        )
-
-    text = "Твои шаблоны:\n\n"
-
-    for i, template in enumerate(user_templates, start=1):
-
-        text += f"{i}. {template['name']}\n"
-
-    text += "\nОтправь номер шаблона"
-
-    return PlainTextResponse(text)
-
-# ------------------ ВЫБОР ШАБЛОНА ------------------
-
-@app.post("/select_template")
-async def select_template(request: Request):
-
-    data = await request.json()
-
-    text = data.get("text", "")
-    contact = data.get("contact", {})
-
-    user_id = str(contact.get("id"))
-
-    user_templates = templates_db.get(user_id, [])
-
-    if not user_templates:
-
-        return PlainTextResponse(
-            "Шаблоны не найдены"
-        )
-
-    try:
-        template_number = int(text)
-
-    except:
-
-        return PlainTextResponse(
-            "Отправь номер шаблона"
-        )
-
-    if template_number < 1 or template_number > len(user_templates):
-
-        return PlainTextResponse(
-            "Неверный номер шаблона"
-        )
-
-    selected_template = user_templates[
-        template_number - 1
-    ]
-
-    # сохраняем state в файл
+    # сохраняем последний шаблон пользователя
     state_file = os.path.join(
         STATE_DIR,
         f"{user_id}.txt"
     )
 
     with open(state_file, "w", encoding="utf-8") as f:
-        f.write(selected_template["path"])
+        f.write(template_path)
 
     return PlainTextResponse(
-        f"Выбран шаблон ✅\n\n{selected_template['name']}\n\nТеперь отправь Excel файл (.xlsx)"
+        "Шаблон загружен ✅\n\nТеперь отправь Excel файл (.xlsx)"
     )
 
 # ------------------ ЗАГРУЗКА EXCEL ------------------
@@ -280,7 +198,7 @@ async def upload_excel(request: Request):
 
     user_id = str(contact.get("id"))
 
-    # читаем выбранный шаблон
+    # шаблон
     state_file = os.path.join(
         STATE_DIR,
         f"{user_id}.txt"
@@ -289,11 +207,11 @@ async def upload_excel(request: Request):
     if not os.path.exists(state_file):
 
         return PlainTextResponse(
-            "Сначала выбери шаблон"
+            "Сначала загрузи шаблон"
         )
 
     with open(state_file, "r", encoding="utf-8") as f:
-        selected_template = f.read()
+        template_path = f.read()
 
     # excel
     file_url = None
@@ -318,7 +236,7 @@ async def upload_excel(request: Request):
 
     # генерация
     zip_name = generate_pptx(
-        template_path=selected_template,
+        template_path=template_path,
         excel_path=excel_path,
         user_id=user_id
     )
