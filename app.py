@@ -156,15 +156,21 @@ async def upload_template(request: Request):
 
         file_url = None
 
-        # БЕРЕМ ПОСЛЕДНИЙ ФАЙЛ
-        for var in reversed(variables):
+        # ИЩЕМ ИМЕННО PPTX
+        for var in variables:
 
             if not var:
                 continue
 
             payload = var.get("payload") or {}
+            meta = var.get("meta") or {}
 
             url = payload.get("url")
+            name = meta.get("name", "")
+
+            # пропускаем всё кроме pptx
+            if not name.lower().endswith(".pptx"):
+                continue
 
             if url:
 
@@ -177,12 +183,16 @@ async def upload_template(request: Request):
                 "PPTX файл не найден"
             )
 
+        # скачиваем pptx
         filename, template_path = download_file(
             file_url,
             TEMPLATES_DIR
         )
 
-        # сохраняем шаблон пользователя
+        print("TEMPLATE PATH:")
+        print(template_path)
+
+        # сохраняем путь к шаблону
         state_file = os.path.join(
             STATE_DIR,
             f"{user_id}.txt"
@@ -197,10 +207,12 @@ async def upload_template(request: Request):
 
     except Exception as e:
 
+        print("UPLOAD TEMPLATE ERROR:")
+        print(str(e))
+
         return PlainTextResponse(
             f"Ошибка upload_template:\n{str(e)}"
         )
-
 # ------------------ ЗАГРУЗКА EXCEL ------------------
 
 @app.post("/upload_excel")
