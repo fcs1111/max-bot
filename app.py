@@ -32,6 +32,7 @@ CASE_MAP = {
     "предложный":   "loct",
 }
 
+
 for d in [TEMPLATES_DIR, EXCEL_DIR, OUTPUT_DIR, STATE_DIR]:
     os.makedirs(d, exist_ok=True)
 
