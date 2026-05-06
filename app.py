@@ -273,9 +273,9 @@ async def upload_excel(request: Request):
 
         full_url = f"{BASE_URL}/files/{zip_name}"
 
-        return {
-            "message": f"Файлы готовы ✅\n{full_url}"
-        }
+        return PlainTextResponse(
+            f"Файлы готовы ✅\n\n{full_url}"
+        )
 
     except Exception as e:
 
