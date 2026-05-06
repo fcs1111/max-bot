@@ -15,7 +15,7 @@ app = FastAPI()
 
 BASE_URL = "https://web-production-a9964.up.railway.app"
 
-WATBOT_WEBHOOK_URL = "https://api.watbot.ru/hook/4727260:QbeXNM2mi0XbghRAI22tDKuONEZjErl6kEJVwZ1D67VGvfup"
+WATBOT_WEBHOOK_URL = "https://api.watbot.ru/hook/4727260:QbeXNM2mi0XbghRAl22tDKu0NEZjErI6kEVJwZ1D67YGvfup"
 
 TEMP_DIR = "temp"
 OUTPUT_DIR = "output"
