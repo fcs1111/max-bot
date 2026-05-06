@@ -5,6 +5,3 @@ pandas
 python-pptx
 openpyxl
 requests
-setuptools
-pymorphy2
-pymorphy2-dicts-ru
