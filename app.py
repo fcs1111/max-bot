@@ -13,7 +13,7 @@ app = FastAPI()
 
 # ------------------ НАСТРОЙКИ ------------------
 
-BASE_URL = "https://ТВОЙ-ПРОЕКТ.up.railway.app"
+BASE_URL = "https://web-production-a9964.up.railway.app"
 
 TEMPLATES_DIR = "templates"
 EXCEL_DIR = "excel"
