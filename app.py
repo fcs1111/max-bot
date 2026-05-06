@@ -213,12 +213,11 @@ async def upload_excel(request: Request):
         print("UPLOAD EXCEL DATA:")
         print(data)
 
-        variables = data.get("variables") or []
         contact = data.get("contact") or {}
 
         user_id = str(contact.get("id"))
 
-        # проверяем шаблон
+        # шаблон
         state_file = os.path.join(
             STATE_DIR,
             f"{user_id}.txt"
@@ -235,7 +234,9 @@ async def upload_excel(request: Request):
 
         file_url = None
 
-        # БЕРЕМ ПОСЛЕДНИЙ ФАЙЛ
+        # 1. пробуем variables
+        variables = data.get("variables") or []
+
         for var in reversed(variables):
 
             if not var:
@@ -245,10 +246,32 @@ async def upload_excel(request: Request):
 
             url = payload.get("url")
 
-            if url:
+            filename = payload.get("name", "")
+
+            if url and (
+                ".xlsx" in filename.lower()
+                or ".xls" in filename.lower()
+            ):
 
                 file_url = url
                 break
+
+        # 2. fallback
+        if not file_url:
+
+            for var in reversed(variables):
+
+                if not var:
+                    continue
+
+                payload = var.get("payload") or {}
+
+                url = payload.get("url")
+
+                if url:
+
+                    file_url = url
+                    break
 
         if not file_url:
 
