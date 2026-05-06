@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request
+cfrom fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -81,7 +81,7 @@ def generate_pptx(template_path, excel_path, user_id):
 
                     for col in df.columns:
 
-                        placeholder = f"%{col}%"
+                        placeholder = str(col)
 
                         if placeholder in text:
                             text = text.replace(
