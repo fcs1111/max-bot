@@ -34,7 +34,7 @@ app.mount("/files", StaticFiles(directory=OUTPUT_DIR), name="files")
 def test():
     return "бот работает"
 
-# ------------------ СКАЧИВАНИЕ ФАЙЛА ------------------
+# ------------------ СКАЧАТЬ ФАЙЛ ------------------
 
 def download_file(file_url, save_dir):
 
@@ -53,16 +53,13 @@ def download_file(file_url, save_dir):
 
 def find_file_url(data):
 
-    # логируем всё
-    print("FULL DATA:")
-    print(json.dumps(data, indent=2, ensure_ascii=False))
+    # ---------------- variables ----------------
 
-    # 1. variables
     variables = data.get("variables") or []
 
     for var in reversed(variables):
 
-        if not var:
+        if not isinstance(var, dict):
             continue
 
         payload = var.get("payload") or {}
@@ -72,15 +69,19 @@ def find_file_url(data):
         if url:
             return url
 
-    # 2. message.file.url
+    # ---------------- message.file ----------------
+
     message = data.get("message") or {}
 
     file_data = message.get("file") or {}
 
-    if file_data.get("url"):
-        return file_data.get("url")
+    url = file_data.get("url")
 
-    # 3. attachments
+    if url:
+        return url
+
+    # ---------------- attachments ----------------
+
     body = message.get("body") or {}
 
     attachments = body.get("attachments") or []
@@ -147,7 +148,7 @@ def generate_pptx(template_path, excel_path, user_id):
         else:
             safe_name = f"file_{index + 1}"
 
-        # очистка
+        # очистка имени
         bad_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
 
         for char in bad_chars:
@@ -183,15 +184,26 @@ def generate_pptx(template_path, excel_path, user_id):
 
     return zip_name
 
-# ------------------ ЗАГРУЗКА ШАБЛОНА ------------------
+# ------------------ TEMPLATE ------------------
 
 @app.post("/upload_template")
 async def upload_template(request: Request):
 
     try:
 
+        # RAW BODY
+        raw_body = await request.body()
+
+        print("RAW BODY:")
+        print(raw_body.decode("utf-8"))
+
+        # JSON
         data = await request.json()
 
+        print("JSON DATA:")
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+
+        # URL
         file_url = find_file_url(data)
 
         if not file_url:
@@ -200,17 +212,20 @@ async def upload_template(request: Request):
                 "PPTX файл не найден"
             )
 
+        # contact
         contact = data.get("contact") or {}
 
         user_id = str(
             contact.get("id", "unknown")
         )
 
+        # download
         filename, template_path = download_file(
             file_url,
             TEMPLATES_DIR
         )
 
+        # save state
         state_file = os.path.join(
             STATE_DIR,
             f"{user_id}.txt"
@@ -225,19 +240,33 @@ async def upload_template(request: Request):
 
     except Exception as e:
 
+        print("UPLOAD TEMPLATE ERROR:")
+        print(str(e))
+
         return PlainTextResponse(
             f"Ошибка upload_template:\n{str(e)}"
         )
 
-# ------------------ ЗАГРУЗКА EXCEL ------------------
+# ------------------ EXCEL ------------------
 
 @app.post("/upload_excel")
 async def upload_excel(request: Request):
 
     try:
 
+        # RAW BODY
+        raw_body = await request.body()
+
+        print("RAW BODY:")
+        print(raw_body.decode("utf-8"))
+
+        # JSON
         data = await request.json()
 
+        print("JSON DATA:")
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+
+        # URL
         file_url = find_file_url(data)
 
         if not file_url:
@@ -246,12 +275,14 @@ async def upload_excel(request: Request):
                 "Excel файл не найден"
             )
 
+        # contact
         contact = data.get("contact") or {}
 
         user_id = str(
             contact.get("id", "unknown")
         )
 
+        # template check
         state_file = os.path.join(
             STATE_DIR,
             f"{user_id}.txt"
@@ -266,6 +297,7 @@ async def upload_excel(request: Request):
         with open(state_file, "r", encoding="utf-8") as f:
             template_path = f.read()
 
+        # download excel
         filename, excel_path = download_file(
             file_url,
             EXCEL_DIR
@@ -274,6 +306,7 @@ async def upload_excel(request: Request):
         print("EXCEL PATH:")
         print(excel_path)
 
+        # generate
         zip_name = generate_pptx(
             template_path=template_path,
             excel_path=excel_path,
@@ -287,6 +320,9 @@ async def upload_excel(request: Request):
         )
 
     except Exception as e:
+
+        print("UPLOAD EXCEL ERROR:")
+        print(str(e))
 
         return PlainTextResponse(
             f"Ошибка сервера:\n{str(e)}"
