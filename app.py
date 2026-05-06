@@ -142,50 +142,62 @@ def generate_pptx(template_path, excel_path, user_id):
 @app.post("/upload_template")
 async def upload_template(request: Request):
 
-    data = await request.json()
+    try:
 
-    variables = data.get("variables", [])
-    contact = data.get("contact", {})
+        data = await request.json()
 
-    user_id = str(contact.get("id"))
+        variables = data.get("variables") or []
+        contact = data.get("contact") or {}
 
-    file_url = None
+        user_id = str(contact.get("id"))
 
-    # ИЩЕМ ИМЕННО PPTX
-    for var in variables:
+        file_url = None
 
-        payload = var.get("payload", {})
+        # DEBUG
+        print("UPLOAD TEMPLATE DATA:")
+        print(data)
 
-        url = payload.get("url", "")
+        # ищем pptx
+        for var in variables:
 
-        if ".pptx" in url.lower():
+            payload = var.get("payload") or {}
 
-            file_url = url
-            break
+            url = payload.get("url") or ""
 
-    if not file_url:
+            if ".pptx" in url.lower():
 
-        return PlainTextResponse(
-            "PPTX файл не найден"
+                file_url = url
+                break
+
+        if not file_url:
+
+            return PlainTextResponse(
+                "PPTX файл не найден"
+            )
+
+        filename, template_path = download_file(
+            file_url,
+            TEMPLATES_DIR
         )
 
-    filename, template_path = download_file(
-        file_url,
-        TEMPLATES_DIR
-    )
+        # сохраняем шаблон
+        state_file = os.path.join(
+            STATE_DIR,
+            f"{user_id}.txt"
+        )
 
-    # сохраняем путь к последнему шаблону
-    state_file = os.path.join(
-        STATE_DIR,
-        f"{user_id}.txt"
-    )
+        with open(state_file, "w", encoding="utf-8") as f:
+            f.write(template_path)
 
-    with open(state_file, "w", encoding="utf-8") as f:
-        f.write(template_path)
+        return PlainTextResponse(
+            "Шаблон загружен ✅\n\nТеперь отправь Excel файл (.xlsx)"
+        )
 
-    return PlainTextResponse(
-        "Шаблон загружен ✅\n\nТеперь отправь Excel файл (.xlsx)"
-    )
+    except Exception as e:
+
+        return PlainTextResponse(
+            f"Ошибка upload_template:\n{str(e)}"
+        )
 
 # ------------------ ЗАГРУЗКА EXCEL ------------------
 
