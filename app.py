@@ -13,9 +13,9 @@ app = FastAPI()
 
 # ------------------ НАСТРОЙКИ ------------------
 
-BASE_URL = "https://web-production-a9964.up.railway.app"
+BASE_URL = "https://web-production-a9964.up.railway.app/"
 
-BOT_TOKEN = "ТВОЙ_ТОКЕН"
+BOT_TOKEN = "f9LHodD0cOIivtqm-8fTlt28_L0RokxyCNiOPUhjiWD2JxYKIIxDgLLUOFKGnUujUpEP63GWeppEZH302YfZ"
 
 TEMP_DIR = "temp"
 OUTPUT_DIR = "output"
@@ -128,7 +128,7 @@ def generate_pptx(template_path, excel_path, output_folder):
 
 # ------------------ WEBHOOK ------------------
 
-@app.post("/webhook")
+@app.post("/")
 async def webhook(request: Request):
 
     try:
