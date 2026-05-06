@@ -46,14 +46,20 @@ async def upload_template(request: Request):
 
         file_url = None
 
-        # ищем файл
         for var in variables:
 
-            if var.get("name") == "file":
+            payload = var.get("payload", {})
 
-                payload = var.get("payload", {})
+            if not isinstance(payload, dict):
+                continue
 
-                file_url = payload.get("url")
+            mime_type = payload.get("mime_type", "")
+            url = payload.get("url", "")
+
+            if "presentation" in mime_type:
+
+                file_url = url
+                break
 
         if not file_url:
 
@@ -61,23 +67,21 @@ async def upload_template(request: Request):
                 "Файл шаблона не найден"
             )
 
-        # скачиваем
         response = requests.get(file_url)
         response.raise_for_status()
 
-        filename = file_url.split("/")[-1].split("?")[0]
+        filename = "template.pptx"
 
         file_path = os.path.join(
             TEMPLATES_DIR,
             filename
         )
 
-        # сохраняем
         with open(file_path, "wb") as f:
             f.write(response.content)
 
         return PlainTextResponse(
-            f"Шаблон {filename} загружен ✅"
+            "Шаблон загружен ✅"
         )
 
     except Exception as e:
@@ -87,7 +91,6 @@ async def upload_template(request: Request):
         return PlainTextResponse(
             f"Ошибка: {str(e)}"
         )
-
 # =========================================================
 # ЗАГРУЗКА EXCEL
 # =========================================================
@@ -105,14 +108,20 @@ async def upload_excel(request: Request):
 
         file_url = None
 
-        # ищем excel
         for var in variables:
 
-            if var.get("name") == "file":
+            payload = var.get("payload", {})
 
-                payload = var.get("payload", {})
+            if not isinstance(payload, dict):
+                continue
 
-                file_url = payload.get("url")
+            mime_type = payload.get("mime_type", "")
+            url = payload.get("url", "")
+
+            if "spreadsheet" in mime_type:
+
+                file_url = url
+                break
 
         if not file_url:
 
@@ -120,23 +129,21 @@ async def upload_excel(request: Request):
                 "Excel файл не найден"
             )
 
-        # скачиваем
         response = requests.get(file_url)
         response.raise_for_status()
 
-        filename = file_url.split("/")[-1].split("?")[0]
+        filename = "data.xlsx"
 
         file_path = os.path.join(
             EXCEL_DIR,
             filename
         )
 
-        # сохраняем excel
         with open(file_path, "wb") as f:
             f.write(response.content)
 
         return PlainTextResponse(
-            f"Excel {filename} загружен ✅"
+            "Excel загружен ✅"
         )
 
     except Exception as e:
