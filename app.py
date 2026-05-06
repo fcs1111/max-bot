@@ -2,13 +2,16 @@ from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse, FileResponse
 import requests
 import os
+import glob
 import pandas as pd
 from pptx import Presentation
 import zipfile
 
 app = FastAPI()
 
-# -------------------- ПАПКИ --------------------
+# =========================================================
+# ПАПКИ
+# =========================================================
 
 TEMPLATES_DIR = "templates"
 EXCEL_DIR = "excel"
@@ -18,15 +21,9 @@ os.makedirs(TEMPLATES_DIR, exist_ok=True)
 os.makedirs(EXCEL_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# -------------------- ПАМЯТЬ --------------------
-
-# шаблоны пользователей
-templates_db = {}
-
-# состояния пользователей
-user_state = {}
-
-# -------------------- ТЕСТ --------------------
+# =========================================================
+# ТЕСТ
+# =========================================================
 
 @app.get("/", response_class=PlainTextResponse)
 def test():
@@ -40,14 +37,12 @@ def test():
 async def upload_template(request: Request):
 
     try:
+
         data = await request.json()
 
         print("UPLOAD TEMPLATE DATA:", data)
 
         variables = data.get("variables", [])
-        contact = data.get("contact", {})
-
-        user_id = str(contact.get("id"))
 
         file_url = None
 
@@ -61,18 +56,17 @@ async def upload_template(request: Request):
                 file_url = payload.get("url")
 
         if not file_url:
+
             return {
                 "message": "Файл шаблона не найден"
             }
 
-        # скачиваем файл
+        # скачиваем
         response = requests.get(file_url)
         response.raise_for_status()
 
-        # имя файла
         filename = file_url.split("/")[-1].split("?")[0]
 
-        # путь
         file_path = os.path.join(
             TEMPLATES_DIR,
             filename
@@ -81,16 +75,6 @@ async def upload_template(request: Request):
         # сохраняем
         with open(file_path, "wb") as f:
             f.write(response.content)
-
-        # создаем пользователя
-        if user_id not in templates_db:
-            templates_db[user_id] = []
-
-        # сохраняем шаблон
-        templates_db[user_id].append({
-            "name": filename,
-            "path": file_path
-        })
 
         return {
             "message": f"Шаблон {filename} загружен"
@@ -112,14 +96,12 @@ async def upload_template(request: Request):
 async def upload_excel(request: Request):
 
     try:
+
         data = await request.json()
 
         print("UPLOAD EXCEL DATA:", data)
 
         variables = data.get("variables", [])
-        contact = data.get("contact", {})
-
-        user_id = str(contact.get("id"))
 
         file_url = None
 
@@ -133,6 +115,7 @@ async def upload_excel(request: Request):
                 file_url = payload.get("url")
 
         if not file_url:
+
             return {
                 "message": "Excel файл не найден"
             }
@@ -152,13 +135,6 @@ async def upload_excel(request: Request):
         with open(file_path, "wb") as f:
             f.write(response.content)
 
-        # создаем состояние
-        if user_id not in user_state:
-            user_state[user_id] = {}
-
-        # сохраняем excel
-        user_state[user_id]["excel"] = file_path
-
         return {
             "message": f"Excel {filename} загружен"
         }
@@ -176,42 +152,40 @@ async def upload_excel(request: Request):
 # =========================================================
 
 @app.post("/generate")
-async def generate(request: Request):
+async def generate():
 
     try:
-        data = await request.json()
 
-        print("GENERATE DATA:", data)
+        # берем последний шаблон
+        template_files = sorted(
+            glob.glob("templates/*.pptx"),
+            key=os.path.getmtime
+        )
 
-        contact = data.get("contact", {})
-
-        user_id = str(contact.get("id"))
-
-        # проверяем шаблоны
-        user_templates = templates_db.get(user_id, [])
-
-        if not user_templates:
+        if not template_files:
 
             return {
                 "message": "Сначала загрузи шаблон"
             }
 
-        # берем последний шаблон
-        latest_template = user_templates[-1]["path"]
+        latest_template = template_files[-1]
 
-        # excel
-        state = user_state.get(user_id, {})
+        # берем последний excel
+        excel_files = sorted(
+            glob.glob("excel/*.xlsx"),
+            key=os.path.getmtime
+        )
 
-        excel_path = state.get("excel")
-
-        if not excel_path:
+        if not excel_files:
 
             return {
                 "message": "Excel не найден"
             }
 
+        latest_excel = excel_files[-1]
+
         # читаем excel
-        df = pd.read_excel(excel_path)
+        df = pd.read_excel(latest_excel)
 
         generated_files = []
 
@@ -231,7 +205,7 @@ async def generate(request: Request):
 
                         text = paragraph.text
 
-                        # замена переменных
+                        # замена плейсхолдеров
                         for col in df.columns:
 
                             placeholder = f"%{col}%"
@@ -259,8 +233,8 @@ async def generate(request: Request):
 
             generated_files.append(output_file)
 
-        # zip
-        zip_filename = f"{user_id}_result.zip"
+        # создаем zip
+        zip_filename = "result.zip"
 
         zip_path = os.path.join(
             OUTPUT_DIR,
@@ -276,10 +250,10 @@ async def generate(request: Request):
                     os.path.basename(file)
                 )
 
-        # ссылка на скачивание
+        # ссылка
         download_url = (
             "https://web-production-a9964.up.railway.app"
-            f"/download/{zip_filename}"
+            "/download/result.zip"
         )
 
         return {
