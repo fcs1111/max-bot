@@ -11,7 +11,9 @@ import shutil
 
 app = FastAPI()
 
-# ------------------ ПАПКИ ------------------
+# ------------------ НАСТРОЙКИ ------------------
+
+BASE_URL = "https://ТВОЙ-ПРОЕКТ.up.railway.app"
 
 TEMPLATES_DIR = "templates"
 EXCEL_DIR = "excel"
@@ -35,12 +37,14 @@ user_state = {}
 def test():
     return "бот работает"
 
-# ------------------ ФУНКЦИЯ ЗАГРУЗКИ ФАЙЛА ------------------
+# ------------------ СКАЧИВАНИЕ ФАЙЛА ------------------
 
 def download_file(file_url, save_dir):
+
     response = requests.get(file_url)
 
     filename = file_url.split("/")[-1].split("?")[0]
+
     path = os.path.join(save_dir, filename)
 
     with open(path, "wb") as f:
@@ -48,28 +52,34 @@ def download_file(file_url, save_dir):
 
     return filename, path
 
-# ------------------ ФУНКЦИЯ ГЕНЕРАЦИИ ------------------
+# ------------------ ГЕНЕРАЦИЯ PPTX ------------------
 
 def generate_pptx(template_path, excel_path, user_id):
 
     # папка пользователя
-    user_output_dir = os.path.join(OUTPUT_DIR, user_id)
+    user_output_dir = os.path.join(
+        OUTPUT_DIR,
+        user_id
+    )
 
-    # очистка старой папки
+    # очистка старых файлов
     if os.path.exists(user_output_dir):
         shutil.rmtree(user_output_dir)
 
     os.makedirs(user_output_dir, exist_ok=True)
 
+    # excel
     df = pd.read_excel(excel_path)
 
     generated_files = []
 
-    for index, row in df.iterrows():
+    # генерация
+    for _, row in df.iterrows():
 
         prs = Presentation(template_path)
 
         for slide in prs.slides:
+
             for shape in slide.shapes:
 
                 if not shape.has_text_frame:
@@ -84,18 +94,32 @@ def generate_pptx(template_path, excel_path, user_id):
                         placeholder = str(col)
 
                         if placeholder in text:
+
+                            value = str(row[col])
+
                             text = text.replace(
                                 placeholder,
-                                str(row[col])
+                                value
                             )
 
                     paragraph.text = text
 
-        safe_name = str(row[df.columns[0]])
+        # имя файла
+        if "Название" in df.columns:
+            safe_name = str(row["Название"])
+        else:
+            safe_name = str(row[df.columns[0]])
+
+        # очистка имени
         safe_name = safe_name.replace("/", "")
         safe_name = safe_name.replace("\\", "")
         safe_name = safe_name.replace(":", "")
         safe_name = safe_name.replace("*", "")
+        safe_name = safe_name.replace("?", "")
+        safe_name = safe_name.replace('"', "")
+        safe_name = safe_name.replace("<", "")
+        safe_name = safe_name.replace(">", "")
+        safe_name = safe_name.replace("|", "")
 
         pptx_filename = f"{safe_name}.pptx"
 
@@ -149,9 +173,7 @@ async def upload_template(request: Request):
             file_url = payload.get("url")
 
     if not file_url:
-        return {
-            "message": "Файл не найден"
-        }
+        return PlainTextResponse("Файл не найден")
 
     filename, path = download_file(
         file_url,
@@ -166,9 +188,9 @@ async def upload_template(request: Request):
         "path": path
     })
 
-    return {
-        "message": f"Шаблон {filename} сохранён"
-    }
+    return PlainTextResponse(
+        f"Шаблон загружен ✅\n\n{filename}"
+    )
 
 # ------------------ СПИСОК ШАБЛОНОВ ------------------
 
@@ -183,20 +205,19 @@ async def get_templates(request: Request):
     user_templates = templates_db.get(user_id, [])
 
     if not user_templates:
-        return {
-            "message": "У тебя нет шаблонов"
-        }
+        return PlainTextResponse(
+            "У тебя пока нет шаблонов"
+        )
 
     text = "Твои шаблоны:\n\n"
 
     for i, template in enumerate(user_templates, start=1):
+
         text += f"{i}. {template['name']}\n"
 
     text += "\nОтправь номер шаблона"
 
-    return {
-        "message": text
-    }
+    return PlainTextResponse(text)
 
 # ------------------ ВЫБОР ШАБЛОНА ------------------
 
@@ -213,22 +234,23 @@ async def select_template(request: Request):
     user_templates = templates_db.get(user_id, [])
 
     if not user_templates:
-        return {
-            "message": "Шаблоны не найдены"
-        }
+        return PlainTextResponse(
+            "Шаблоны не найдены"
+        )
 
     try:
         template_number = int(text)
 
     except:
-        return {
-            "message": "Отправь номер шаблона"
-        }
+        return PlainTextResponse(
+            "Отправь номер шаблона"
+        )
 
     if template_number < 1 or template_number > len(user_templates):
-        return {
-            "message": "Неверный номер шаблона"
-        }
+
+        return PlainTextResponse(
+            "Неверный номер шаблона"
+        )
 
     selected_template = user_templates[
         template_number - 1
@@ -239,9 +261,9 @@ async def select_template(request: Request):
 
     user_state[user_id]["selected_template"] = selected_template["path"]
 
-    return {
-        "message": f"Выбран шаблон:\n{selected_template['name']}\n\nТеперь отправь Excel файл"
-    }
+    return PlainTextResponse(
+        f"Выбран шаблон ✅\n\n{selected_template['name']}\n\nТеперь отправь Excel файл (.xlsx)"
+    )
 
 # ------------------ ЗАГРУЗКА EXCEL ------------------
 
@@ -261,9 +283,9 @@ async def upload_excel(request: Request):
     selected_template = state.get("selected_template")
 
     if not selected_template:
-        return {
-            "message": "Сначала выбери шаблон"
-        }
+        return PlainTextResponse(
+            "Сначала выбери шаблон"
+        )
 
     file_url = None
 
@@ -275,9 +297,9 @@ async def upload_excel(request: Request):
             file_url = payload.get("url")
 
     if not file_url:
-        return {
-            "message": "Excel не найден"
-        }
+        return PlainTextResponse(
+            "Excel файл не найден"
+        )
 
     filename, excel_path = download_file(
         file_url,
@@ -293,9 +315,8 @@ async def upload_excel(request: Request):
         user_id=user_id
     )
 
-    file_url = f"/files/{zip_name}"
+    full_url = f"{BASE_URL}/files/{zip_name}"
 
-    return {
-        "message": "Файлы готовы",
-        "url": file_url
-    }
+    return PlainTextResponse(
+        f"Файлы готовы ✅\n\n{full_url}"
+    )
