@@ -57,9 +57,9 @@ async def upload_template(request: Request):
 
         if not file_url:
 
-            return {
-                "message": "Файл шаблона не найден"
-            }
+            return PlainTextResponse(
+                "Файл шаблона не найден"
+            )
 
         # скачиваем
         response = requests.get(file_url)
@@ -76,17 +76,17 @@ async def upload_template(request: Request):
         with open(file_path, "wb") as f:
             f.write(response.content)
 
-        return {
-            "message": f"Шаблон {filename} загружен"
-        }
+        return PlainTextResponse(
+            f"Шаблон {filename} загружен ✅"
+        )
 
     except Exception as e:
 
         print("UPLOAD TEMPLATE ERROR:", str(e))
 
-        return {
-            "message": f"Ошибка: {str(e)}"
-        }
+        return PlainTextResponse(
+            f"Ошибка: {str(e)}"
+        )
 
 # =========================================================
 # ЗАГРУЗКА EXCEL
@@ -116,9 +116,9 @@ async def upload_excel(request: Request):
 
         if not file_url:
 
-            return {
-                "message": "Excel файл не найден"
-            }
+            return PlainTextResponse(
+                "Excel файл не найден"
+            )
 
         # скачиваем
         response = requests.get(file_url)
@@ -135,17 +135,17 @@ async def upload_excel(request: Request):
         with open(file_path, "wb") as f:
             f.write(response.content)
 
-        return {
-            "message": f"Excel {filename} загружен"
-        }
+        return PlainTextResponse(
+            f"Excel {filename} загружен ✅"
+        )
 
     except Exception as e:
 
         print("UPLOAD EXCEL ERROR:", str(e))
 
-        return {
-            "message": f"Ошибка: {str(e)}"
-        }
+        return PlainTextResponse(
+            f"Ошибка: {str(e)}"
+        )
 
 # =========================================================
 # ГЕНЕРАЦИЯ
@@ -164,9 +164,9 @@ async def generate():
 
         if not template_files:
 
-            return {
-                "message": "Сначала загрузи шаблон"
-            }
+            return PlainTextResponse(
+                "Сначала загрузи шаблон"
+            )
 
         latest_template = template_files[-1]
 
@@ -178,9 +178,9 @@ async def generate():
 
         if not excel_files:
 
-            return {
-                "message": "Excel не найден"
-            }
+            return PlainTextResponse(
+                "Excel не найден"
+            )
 
         latest_excel = excel_files[-1]
 
@@ -256,17 +256,17 @@ async def generate():
             "/download/result.zip"
         )
 
-        return {
-            "message": download_url
-        }
+        return PlainTextResponse(
+            f"ZIP готов ✅\n{download_url}"
+        )
 
     except Exception as e:
 
         print("GENERATE ERROR:", str(e))
 
-        return {
-            "message": f"Ошибка генерации: {str(e)}"
-        }
+        return PlainTextResponse(
+            f"Ошибка генерации: {str(e)}"
+        )
 
 # =========================================================
 # СКАЧИВАНИЕ ZIP
@@ -282,9 +282,9 @@ async def download_file(filename: str):
 
     if not os.path.exists(file_path):
 
-        return {
-            "message": "Файл не найден"
-        }
+        return PlainTextResponse(
+            "Файл не найден"
+        )
 
     return FileResponse(
         path=file_path,
