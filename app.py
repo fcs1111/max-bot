@@ -1,291 +1,287 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
-from fastapi.staticfiles import StaticFiles
-
 import requests
 import os
 import pandas as pd
 from pptx import Presentation
 import zipfile
-import shutil
 
 app = FastAPI()
 
-# ------------------ НАСТРОЙКИ ------------------
+# -------------------- ПАПКИ --------------------
 
-BASE_URL = "https://web-production-a9964.up.railway.app"
-
-WATBOT_WEBHOOK_URL = "https://api.watbot.ru/hook/4727260:QbeXNM2mi0XbghRAl22tDKu0NEZjErI6kEVJwZ1D67YGvfup"
-
-TEMP_DIR = "temp"
+TEMPLATES_DIR = "templates"
+EXCEL_DIR = "excel"
 OUTPUT_DIR = "output"
-STATE_DIR = "state"
 
-os.makedirs(TEMP_DIR, exist_ok=True)
+os.makedirs(TEMPLATES_DIR, exist_ok=True)
+os.makedirs(EXCEL_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-os.makedirs(STATE_DIR, exist_ok=True)
 
-app.mount("/files", StaticFiles(directory=OUTPUT_DIR), name="files")
+# -------------------- ПАМЯТЬ --------------------
 
-# ------------------ TEST ------------------
+# шаблоны пользователей
+templates_db = {}
+
+# состояния пользователей
+user_state = {}
+
+# -------------------- ТЕСТ --------------------
 
 @app.get("/", response_class=PlainTextResponse)
-def home():
+def test():
     return "бот работает"
 
-# ------------------ ОТПРАВКА В WATBOT ------------------
+# =========================================================
+# ЗАГРУЗКА ШАБЛОНА
+# =========================================================
 
-def send_message(chat_id, text):
-
-    payload = {
-        "chat_id": str(chat_id),
-        "text": text
-    }
-
-    response = requests.post(
-        WATBOT_WEBHOOK_URL,
-        json=payload
-    )
-
-    print("WATBOT STATUS:")
-    print(response.status_code)
-
-    print("WATBOT RESPONSE:")
-    print(response.text)
-
-# ------------------ СКАЧАТЬ ФАЙЛ ------------------
-
-def download_file(url, path):
-
-    response = requests.get(url)
-
-    with open(path, "wb") as f:
-        f.write(response.content)
-
-# ------------------ ГЕНЕРАЦИЯ PPTX ------------------
-
-def generate_pptx(template_path, excel_path, output_folder):
-
-    df = pd.read_excel(excel_path)
-
-    generated_files = []
-
-    for index, row in df.iterrows():
-
-        prs = Presentation(template_path)
-
-        for slide in prs.slides:
-
-            for shape in slide.shapes:
-
-                if not hasattr(shape, "text"):
-                    continue
-
-                text = shape.text
-
-                for col in df.columns:
-
-                    placeholder = str(col).strip()
-                    value = str(row[col])
-
-                    text = text.replace(
-                        placeholder,
-                        value
-                    )
-
-                shape.text = text
-
-        # имя файла
-        if "Название" in df.columns:
-            safe_name = str(row["Название"])
-        else:
-            safe_name = f"file_{index + 1}"
-
-        # очистка имени
-        bad_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
-
-        for char in bad_chars:
-            safe_name = safe_name.replace(char, "")
-
-        pptx_name = f"{safe_name}.pptx"
-
-        pptx_path = os.path.join(
-            output_folder,
-            pptx_name
-        )
-
-        prs.save(pptx_path)
-
-        generated_files.append(pptx_path)
-
-    return generated_files
-
-# ------------------ WEBHOOK ------------------
-
-@app.post("/")
-async def webhook(request: Request):
+@app.post("/upload_template")
+async def upload_template(request: Request):
 
     try:
-
         data = await request.json()
 
-        print("WEBHOOK DATA:")
-        print(data)
+        print("UPLOAD TEMPLATE DATA:", data)
 
-        message = data.get("message") or {}
-        sender = message.get("sender") or {}
+        variables = data.get("variables", [])
+        contact = data.get("contact", {})
 
-        chat_id = sender.get("user_id")
+        user_id = str(contact.get("id"))
 
-        attachments = (
-            message.get("body", {})
-            .get("attachments", [])
-        )
+        file_url = None
 
-        if not attachments:
+        # ищем файл
+        for var in variables:
 
-            send_message(
-                chat_id,
-                "Отправь PPTX или Excel файл"
-            )
+            if var.get("name") == "file":
 
-            return {"ok": True}
+                payload = var.get("payload", {})
 
-        attachment = attachments[0]
-
-        payload = attachment.get("payload") or {}
-
-        file_url = payload.get("url")
-        filename = payload.get("filename", "")
+                file_url = payload.get("url")
 
         if not file_url:
+            return {
+                "message": "Файл шаблона не найден"
+            }
 
-            send_message(
-                chat_id,
-                "Файл не найден"
-            )
+        # скачиваем файл
+        response = requests.get(file_url)
+        response.raise_for_status()
 
-            return {"ok": True}
+        # имя файла
+        filename = file_url.split("/")[-1].split("?")[0]
 
-        # ------------------ PPTX ------------------
-
-        if filename.lower().endswith(".pptx"):
-
-            template_path = os.path.join(
-                STATE_DIR,
-                f"{chat_id}_template.pptx"
-            )
-
-            download_file(
-                file_url,
-                template_path
-            )
-
-            send_message(
-                chat_id,
-                "Шаблон сохранен ✅\n\nТеперь отправь Excel файл"
-            )
-
-            return {"ok": True}
-
-        # ------------------ EXCEL ------------------
-
-        if (
-            filename.lower().endswith(".xlsx")
-            or filename.lower().endswith(".xls")
-        ):
-
-            template_path = os.path.join(
-                STATE_DIR,
-                f"{chat_id}_template.pptx"
-            )
-
-            if not os.path.exists(template_path):
-
-                send_message(
-                    chat_id,
-                    "Сначала отправь PPTX шаблон"
-                )
-
-                return {"ok": True}
-
-            user_temp = os.path.join(
-                TEMP_DIR,
-                str(chat_id)
-            )
-
-            user_output = os.path.join(
-                OUTPUT_DIR,
-                str(chat_id)
-            )
-
-            if os.path.exists(user_temp):
-                shutil.rmtree(user_temp)
-
-            if os.path.exists(user_output):
-                shutil.rmtree(user_output)
-
-            os.makedirs(user_temp, exist_ok=True)
-            os.makedirs(user_output, exist_ok=True)
-
-            excel_path = os.path.join(
-                user_temp,
-                "data.xlsx"
-            )
-
-            download_file(
-                file_url,
-                excel_path
-            )
-
-            generated_files = generate_pptx(
-                template_path,
-                excel_path,
-                user_output
-            )
-
-            zip_name = f"{chat_id}_result.zip"
-
-            zip_path = os.path.join(
-                OUTPUT_DIR,
-                zip_name
-            )
-
-            with zipfile.ZipFile(
-                zip_path,
-                "w",
-                zipfile.ZIP_DEFLATED
-            ) as zipf:
-
-                for file in generated_files:
-
-                    zipf.write(
-                        file,
-                        arcname=os.path.basename(file)
-                    )
-
-            zip_url = f"{BASE_URL}/files/{zip_name}"
-
-            send_message(
-                chat_id,
-                f"Готово ✅\n\nСкачать ZIP:\n{zip_url}"
-            )
-
-            return {"ok": True}
-
-        send_message(
-            chat_id,
-            "Неподдерживаемый формат файла"
+        # путь
+        file_path = os.path.join(
+            TEMPLATES_DIR,
+            filename
         )
 
-        return {"ok": True}
+        # сохраняем
+        with open(file_path, "wb") as f:
+            f.write(response.content)
+
+        # создаем пользователя
+        if user_id not in templates_db:
+            templates_db[user_id] = []
+
+        # сохраняем шаблон
+        templates_db[user_id].append({
+            "name": filename,
+            "path": file_path
+        })
+
+        return {
+            "message": f"Шаблон {filename} загружен"
+        }
 
     except Exception as e:
 
-        print("ERROR:")
-        print(str(e))
+        print("UPLOAD TEMPLATE ERROR:", str(e))
 
         return {
-            "ok": False,
-            "error": str(e)
+            "message": f"Ошибка: {str(e)}"
+        }
+
+# =========================================================
+# ЗАГРУЗКА EXCEL
+# =========================================================
+
+@app.post("/upload_excel")
+async def upload_excel(request: Request):
+
+    try:
+        data = await request.json()
+
+        print("UPLOAD EXCEL DATA:", data)
+
+        variables = data.get("variables", [])
+        contact = data.get("contact", {})
+
+        user_id = str(contact.get("id"))
+
+        file_url = None
+
+        # ищем excel
+        for var in variables:
+
+            if var.get("name") == "file":
+
+                payload = var.get("payload", {})
+
+                file_url = payload.get("url")
+
+        if not file_url:
+            return {
+                "message": "Excel файл не найден"
+            }
+
+        # скачиваем
+        response = requests.get(file_url)
+        response.raise_for_status()
+
+        filename = file_url.split("/")[-1].split("?")[0]
+
+        file_path = os.path.join(
+            EXCEL_DIR,
+            filename
+        )
+
+        # сохраняем excel
+        with open(file_path, "wb") as f:
+            f.write(response.content)
+
+        # создаем состояние
+        if user_id not in user_state:
+            user_state[user_id] = {}
+
+        # сохраняем excel
+        user_state[user_id]["excel"] = file_path
+
+        return {
+            "message": f"Excel {filename} загружен"
+        }
+
+    except Exception as e:
+
+        print("UPLOAD EXCEL ERROR:", str(e))
+
+        return {
+            "message": f"Ошибка: {str(e)}"
+        }
+
+# =========================================================
+# ГЕНЕРАЦИЯ
+# =========================================================
+
+@app.post("/generate")
+async def generate(request: Request):
+
+    try:
+        data = await request.json()
+
+        print("GENERATE DATA:", data)
+
+        contact = data.get("contact", {})
+
+        user_id = str(contact.get("id"))
+
+        # проверяем шаблоны
+        user_templates = templates_db.get(user_id, [])
+
+        if not user_templates:
+
+            return {
+                "message": "Сначала загрузи шаблон"
+            }
+
+        # берем последний шаблон
+        latest_template = user_templates[-1]["path"]
+
+        # excel
+        state = user_state.get(user_id, {})
+
+        excel_path = state.get("excel")
+
+        if not excel_path:
+
+            return {
+                "message": "Excel не найден"
+            }
+
+        # читаем excel
+        df = pd.read_excel(excel_path)
+
+        generated_files = []
+
+        # генерация
+        for _, row in df.iterrows():
+
+            prs = Presentation(latest_template)
+
+            for slide in prs.slides:
+
+                for shape in slide.shapes:
+
+                    if not shape.has_text_frame:
+                        continue
+
+                    for paragraph in shape.text_frame.paragraphs:
+
+                        text = paragraph.text
+
+                        # замена переменных
+                        for col in df.columns:
+
+                            placeholder = f"%{col}%"
+
+                            if placeholder in text:
+
+                                text = text.replace(
+                                    placeholder,
+                                    str(row[col])
+                                )
+
+                        paragraph.text = text
+
+            # имя файла
+            safe_name = str(
+                row[df.columns[0]]
+            ).replace("/", "").replace("\\", "")
+
+            output_file = os.path.join(
+                OUTPUT_DIR,
+                f"{safe_name}.pptx"
+            )
+
+            prs.save(output_file)
+
+            generated_files.append(output_file)
+
+        # zip
+        zip_path = os.path.join(
+            OUTPUT_DIR,
+            f"{user_id}_result.zip"
+        )
+
+        with zipfile.ZipFile(zip_path, "w") as zipf:
+
+            for file in generated_files:
+
+                zipf.write(
+                    file,
+                    os.path.basename(file)
+                )
+
+        return {
+            "message": f"ZIP готов: {zip_path}"
+        }
+
+    except Exception as e:
+
+        print("GENERATE ERROR:", str(e))
+
+        return {
+            "message": f"Ошибка генерации: {str(e)}"
         }
