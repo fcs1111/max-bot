@@ -69,7 +69,7 @@ def generate_pptx(template_path, excel_path, user_id):
 
     generated_files = []
 
-    for _, row in df.iterrows():
+    for index, row in df.iterrows():
 
         prs = Presentation(template_path)
 
@@ -77,35 +77,31 @@ def generate_pptx(template_path, excel_path, user_id):
 
             for shape in slide.shapes:
 
-                if not shape.has_text_frame:
+                if not hasattr(shape, "text"):
                     continue
 
-                for paragraph in shape.text_frame.paragraphs:
+                text = shape.text
 
-                    text = paragraph.text
+                for col in df.columns:
 
-                    for col in df.columns:
+                    placeholder = str(col).strip()
 
-                        placeholder = str(col)
+                    value = str(row[col])
 
-                        if placeholder in text:
+                    text = text.replace(
+                        placeholder,
+                        value
+                    )
 
-                            value = str(row[col])
-
-                            text = text.replace(
-                                placeholder,
-                                value
-                            )
-
-                    paragraph.text = text
+                shape.text = text
 
         # имя файла
         if "Название" in df.columns:
             safe_name = str(row["Название"])
         else:
-            safe_name = f"file_{_+1}"
+            safe_name = f"file_{index + 1}"
 
-        # очистка имени
+        # очистка имени файла
         bad_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
 
         for char in bad_chars:
@@ -155,17 +151,22 @@ async def upload_template(request: Request):
 
     file_url = None
 
+    # ИЩЕМ ИМЕННО PPTX
     for var in variables:
 
-        if var.get("name") == "file":
+        payload = var.get("payload", {})
 
-            payload = var.get("payload", {})
-            file_url = payload.get("url")
+        url = payload.get("url", "")
+
+        if ".pptx" in url.lower():
+
+            file_url = url
+            break
 
     if not file_url:
 
         return PlainTextResponse(
-            "Файл не найден"
+            "PPTX файл не найден"
         )
 
     filename, template_path = download_file(
@@ -173,7 +174,7 @@ async def upload_template(request: Request):
         TEMPLATES_DIR
     )
 
-    # сохраняем последний шаблон пользователя
+    # сохраняем путь к последнему шаблону
     state_file = os.path.join(
         STATE_DIR,
         f"{user_id}.txt"
@@ -191,58 +192,70 @@ async def upload_template(request: Request):
 @app.post("/upload_excel")
 async def upload_excel(request: Request):
 
-    data = await request.json()
+    try:
 
-    variables = data.get("variables", [])
-    contact = data.get("contact", {})
+        data = await request.json()
 
-    user_id = str(contact.get("id"))
+        variables = data.get("variables", [])
+        contact = data.get("contact", {})
 
-    # шаблон
-    state_file = os.path.join(
-        STATE_DIR,
-        f"{user_id}.txt"
-    )
+        user_id = str(contact.get("id"))
 
-    if not os.path.exists(state_file):
-
-        return PlainTextResponse(
-            "Сначала загрузи шаблон"
+        # получаем шаблон
+        state_file = os.path.join(
+            STATE_DIR,
+            f"{user_id}.txt"
         )
 
-    with open(state_file, "r", encoding="utf-8") as f:
-        template_path = f.read()
+        if not os.path.exists(state_file):
 
-    # excel
-    file_url = None
+            return PlainTextResponse(
+                "Сначала загрузи шаблон"
+            )
 
-    for var in variables:
+        with open(state_file, "r", encoding="utf-8") as f:
+            template_path = f.read()
 
-        if var.get("name") == "file":
+        # ищем excel
+        file_url = None
+
+        for var in variables:
 
             payload = var.get("payload", {})
-            file_url = payload.get("url")
 
-    if not file_url:
+            url = payload.get("url", "")
 
-        return PlainTextResponse(
-            "Excel файл не найден"
+            if ".xlsx" in url.lower():
+
+                file_url = url
+                break
+
+        if not file_url:
+
+            return PlainTextResponse(
+                "Excel файл не найден"
+            )
+
+        filename, excel_path = download_file(
+            file_url,
+            EXCEL_DIR
         )
 
-    filename, excel_path = download_file(
-        file_url,
-        EXCEL_DIR
-    )
+        # генерация
+        zip_name = generate_pptx(
+            template_path=template_path,
+            excel_path=excel_path,
+            user_id=user_id
+        )
 
-    # генерация
-    zip_name = generate_pptx(
-        template_path=template_path,
-        excel_path=excel_path,
-        user_id=user_id
-    )
+        full_url = f"{BASE_URL}/files/{zip_name}"
 
-    full_url = f"{BASE_URL}/files/{zip_name}"
+        return PlainTextResponse(
+            f"Файлы готовы ✅\n\n{full_url}"
+        )
 
-    return PlainTextResponse(
-        f"Файлы готовы ✅\n\n{full_url}"
-    )
+    except Exception as e:
+
+        return PlainTextResponse(
+            f"Ошибка сервера:\n{str(e)}"
+        )
