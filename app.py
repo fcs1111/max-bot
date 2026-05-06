@@ -18,18 +18,19 @@ BASE_URL = "https://ТВОЙ-ПРОЕКТ.up.railway.app"
 TEMPLATES_DIR = "templates"
 EXCEL_DIR = "excel"
 OUTPUT_DIR = "output"
+STATE_DIR = "state"
 
 os.makedirs(TEMPLATES_DIR, exist_ok=True)
 os.makedirs(EXCEL_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(STATE_DIR, exist_ok=True)
 
 # static files
 app.mount("/files", StaticFiles(directory=OUTPUT_DIR), name="files")
 
-# ------------------ ПАМЯТЬ ------------------
+# ------------------ ПАМЯТЬ ШАБЛОНОВ ------------------
 
 templates_db = {}
-user_state = {}
 
 # ------------------ TEST ------------------
 
@@ -56,7 +57,6 @@ def download_file(file_url, save_dir):
 
 def generate_pptx(template_path, excel_path, user_id):
 
-    # папка пользователя
     user_output_dir = os.path.join(
         OUTPUT_DIR,
         user_id
@@ -73,7 +73,6 @@ def generate_pptx(template_path, excel_path, user_id):
 
     generated_files = []
 
-    # генерация
     for _, row in df.iterrows():
 
         prs = Presentation(template_path)
@@ -111,15 +110,10 @@ def generate_pptx(template_path, excel_path, user_id):
             safe_name = str(row[df.columns[0]])
 
         # очистка имени
-        safe_name = safe_name.replace("/", "")
-        safe_name = safe_name.replace("\\", "")
-        safe_name = safe_name.replace(":", "")
-        safe_name = safe_name.replace("*", "")
-        safe_name = safe_name.replace("?", "")
-        safe_name = safe_name.replace('"', "")
-        safe_name = safe_name.replace("<", "")
-        safe_name = safe_name.replace(">", "")
-        safe_name = safe_name.replace("|", "")
+        bad_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
+
+        for char in bad_chars:
+            safe_name = safe_name.replace(char, "")
 
         pptx_filename = f"{safe_name}.pptx"
 
@@ -173,7 +167,9 @@ async def upload_template(request: Request):
             file_url = payload.get("url")
 
     if not file_url:
-        return PlainTextResponse("Файл не найден")
+        return PlainTextResponse(
+            "Файл не найден"
+        )
 
     filename, path = download_file(
         file_url,
@@ -205,6 +201,7 @@ async def get_templates(request: Request):
     user_templates = templates_db.get(user_id, [])
 
     if not user_templates:
+
         return PlainTextResponse(
             "У тебя пока нет шаблонов"
         )
@@ -226,7 +223,7 @@ async def select_template(request: Request):
 
     data = await request.json()
 
-    text = data.get("message", {}).get("text", "")
+    text = data.get("text", "")
     contact = data.get("contact", {})
 
     user_id = str(contact.get("id"))
@@ -234,6 +231,7 @@ async def select_template(request: Request):
     user_templates = templates_db.get(user_id, [])
 
     if not user_templates:
+
         return PlainTextResponse(
             "Шаблоны не найдены"
         )
@@ -242,6 +240,7 @@ async def select_template(request: Request):
         template_number = int(text)
 
     except:
+
         return PlainTextResponse(
             "Отправь номер шаблона"
         )
@@ -256,10 +255,14 @@ async def select_template(request: Request):
         template_number - 1
     ]
 
-    if user_id not in user_state:
-        user_state[user_id] = {}
+    # сохраняем state в файл
+    state_file = os.path.join(
+        STATE_DIR,
+        f"{user_id}.txt"
+    )
 
-    user_state[user_id]["selected_template"] = selected_template["path"]
+    with open(state_file, "w", encoding="utf-8") as f:
+        f.write(selected_template["path"])
 
     return PlainTextResponse(
         f"Выбран шаблон ✅\n\n{selected_template['name']}\n\nТеперь отправь Excel файл (.xlsx)"
@@ -277,16 +280,22 @@ async def upload_excel(request: Request):
 
     user_id = str(contact.get("id"))
 
-    # проверка шаблона
-    state = user_state.get(user_id, {})
+    # читаем выбранный шаблон
+    state_file = os.path.join(
+        STATE_DIR,
+        f"{user_id}.txt"
+    )
 
-    selected_template = state.get("selected_template")
+    if not os.path.exists(state_file):
 
-    if not selected_template:
         return PlainTextResponse(
             "Сначала выбери шаблон"
         )
 
+    with open(state_file, "r", encoding="utf-8") as f:
+        selected_template = f.read()
+
+    # excel
     file_url = None
 
     for var in variables:
@@ -297,6 +306,7 @@ async def upload_excel(request: Request):
             file_url = payload.get("url")
 
     if not file_url:
+
         return PlainTextResponse(
             "Excel файл не найден"
         )
@@ -305,8 +315,6 @@ async def upload_excel(request: Request):
         file_url,
         EXCEL_DIR
     )
-
-    user_state[user_id]["excel"] = excel_path
 
     # генерация
     zip_name = generate_pptx(
