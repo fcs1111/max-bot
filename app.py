@@ -25,7 +25,7 @@ os.makedirs(EXCEL_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(STATE_DIR, exist_ok=True)
 
-# static files
+# статические файлы
 app.mount("/files", StaticFiles(directory=OUTPUT_DIR), name="files")
 
 # ------------------ TEST ------------------
@@ -64,7 +64,7 @@ def generate_pptx(template_path, excel_path, user_id):
 
     os.makedirs(user_output_dir, exist_ok=True)
 
-    # excel
+    # читаем excel
     df = pd.read_excel(excel_path)
 
     generated_files = []
@@ -82,10 +82,10 @@ def generate_pptx(template_path, excel_path, user_id):
 
                 text = shape.text
 
+                # замена плейсхолдеров
                 for col in df.columns:
 
                     placeholder = str(col).strip()
-
                     value = str(row[col])
 
                     text = text.replace(
@@ -101,7 +101,7 @@ def generate_pptx(template_path, excel_path, user_id):
         else:
             safe_name = f"file_{index + 1}"
 
-        # очистка имени файла
+        # очистка имени
         bad_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
 
         for char in bad_chars:
@@ -118,7 +118,7 @@ def generate_pptx(template_path, excel_path, user_id):
 
         generated_files.append(pptx_path)
 
-    # ZIP
+    # создаем zip
     zip_name = f"{user_id}_result.zip"
 
     zip_path = os.path.join(
@@ -156,7 +156,7 @@ async def upload_template(request: Request):
 
         file_url = None
 
-        # ИЩЕМ PPTX ПО MIME TYPE
+        # БЕРЕМ ПОСЛЕДНИЙ ФАЙЛ
         for var in reversed(variables):
 
             if not var:
@@ -164,13 +164,9 @@ async def upload_template(request: Request):
 
             payload = var.get("payload") or {}
 
-            mime_type = payload.get("mime_type", "")
             url = payload.get("url")
 
-            if (
-                "presentation" in mime_type.lower()
-                and url
-            ):
+            if url:
 
                 file_url = url
                 break
@@ -186,7 +182,7 @@ async def upload_template(request: Request):
             TEMPLATES_DIR
         )
 
-        # сохраняем путь к шаблону
+        # сохраняем шаблон пользователя
         state_file = os.path.join(
             STATE_DIR,
             f"{user_id}.txt"
@@ -222,7 +218,7 @@ async def upload_excel(request: Request):
 
         user_id = str(contact.get("id"))
 
-        # шаблон
+        # проверяем шаблон
         state_file = os.path.join(
             STATE_DIR,
             f"{user_id}.txt"
@@ -237,9 +233,9 @@ async def upload_excel(request: Request):
         with open(state_file, "r", encoding="utf-8") as f:
             template_path = f.read()
 
-        # ищем excel
         file_url = None
 
+        # БЕРЕМ ПОСЛЕДНИЙ ФАЙЛ
         for var in reversed(variables):
 
             if not var:
@@ -247,16 +243,9 @@ async def upload_excel(request: Request):
 
             payload = var.get("payload") or {}
 
-            mime_type = payload.get("mime_type", "")
             url = payload.get("url")
 
-            if (
-                (
-                    "spreadsheet" in mime_type.lower()
-                    or "excel" in mime_type.lower()
-                )
-                and url
-            ):
+            if url:
 
                 file_url = url
                 break
@@ -271,6 +260,9 @@ async def upload_excel(request: Request):
             file_url,
             EXCEL_DIR
         )
+
+        print("EXCEL PATH:")
+        print(excel_path)
 
         # генерация
         zip_name = generate_pptx(
