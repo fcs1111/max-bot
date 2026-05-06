@@ -13,9 +13,9 @@ app = FastAPI()
 
 # ------------------ НАСТРОЙКИ ------------------
 
-BASE_URL = "https://web-production-a9964.up.railway.app/"
+BASE_URL = "https://web-production-a9964.up.railway.app"
 
-BOT_TOKEN = "f9LHodD0cOIivtqm-8fTlt28_L0RokxyCNiOPUhjiWD2JxYKIIxDgLLUOFKGnUujUpEP63GWeppEZH302YfZ"
+WATBOT_WEBHOOK_URL = "https://api.watbot.ru/hook/4727260:QbeXNM2mi0XbghRAI22tDKuONEZjErl6kEJVwZ1D67VGvfup"
 
 TEMP_DIR = "temp"
 OUTPUT_DIR = "output"
@@ -33,6 +33,26 @@ app.mount("/files", StaticFiles(directory=OUTPUT_DIR), name="files")
 def home():
     return "бот работает"
 
+# ------------------ ОТПРАВКА В WATBOT ------------------
+
+def send_message(chat_id, text):
+
+    payload = {
+        "chat_id": str(chat_id),
+        "text": text
+    }
+
+    response = requests.post(
+        WATBOT_WEBHOOK_URL,
+        json=payload
+    )
+
+    print("WATBOT STATUS:")
+    print(response.status_code)
+
+    print("WATBOT RESPONSE:")
+    print(response.text)
+
 # ------------------ СКАЧАТЬ ФАЙЛ ------------------
 
 def download_file(url, path):
@@ -41,32 +61,6 @@ def download_file(url, path):
 
     with open(path, "wb") as f:
         f.write(response.content)
-
-# ------------------ ОТПРАВИТЬ СООБЩЕНИЕ ------------------
-
-def send_message(chat_id, text):
-
-    headers = {
-        "Authorization": f"Bearer {BOT_TOKEN}",
-        "Content-Type": "application/json"
-    }
-
-    payload = {
-        "chat_id": str(chat_id),
-        "text": text
-    }
-
-    response = requests.post(
-        "https://botapi.max.ru/messages",
-        headers=headers,
-        json=payload
-    )
-
-    print("SEND MESSAGE STATUS:")
-    print(response.status_code)
-
-    print("SEND MESSAGE RESPONSE:")
-    print(response.text)
 
 # ------------------ ГЕНЕРАЦИЯ PPTX ------------------
 
@@ -162,7 +156,7 @@ async def webhook(request: Request):
         payload = attachment.get("payload") or {}
 
         file_url = payload.get("url")
-        filename = payload.get("file_name", "")
+        filename = payload.get("filename", "")
 
         if not file_url:
 
