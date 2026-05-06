@@ -208,12 +208,15 @@ async def upload_excel(request: Request):
 
         data = await request.json()
 
-        variables = data.get("variables", [])
-        contact = data.get("contact", {})
+        print("UPLOAD EXCEL DATA:")
+        print(data)
+
+        variables = data.get("variables") or []
+        contact = data.get("contact") or {}
 
         user_id = str(contact.get("id"))
 
-        # получаем шаблон
+        # шаблон
         state_file = os.path.join(
             STATE_DIR,
             f"{user_id}.txt"
@@ -228,14 +231,17 @@ async def upload_excel(request: Request):
         with open(state_file, "r", encoding="utf-8") as f:
             template_path = f.read()
 
-        # ищем excel
+        # excel
         file_url = None
 
         for var in variables:
 
-            payload = var.get("payload", {})
+            if not var:
+                continue
 
-            url = payload.get("url", "")
+            payload = var.get("payload") or {}
+
+            url = payload.get("url") or ""
 
             if ".xlsx" in url.lower():
 
