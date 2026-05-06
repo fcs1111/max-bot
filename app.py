@@ -241,9 +241,9 @@ async def upload_excel(request: Request):
 
             payload = var.get("payload") or {}
 
-            url = payload.get("url") or ""
+            url = payload.get("url")
 
-            if ".xlsx" in url.lower():
+            if url:
 
                 file_url = url
                 break
