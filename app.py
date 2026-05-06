@@ -146,6 +146,9 @@ async def upload_template(request: Request):
 
         data = await request.json()
 
+        print("UPLOAD TEMPLATE DATA:")
+        print(data)
+
         variables = data.get("variables") or []
         contact = data.get("contact") or {}
 
@@ -153,18 +156,21 @@ async def upload_template(request: Request):
 
         file_url = None
 
-        # DEBUG
-        print("UPLOAD TEMPLATE DATA:")
-        print(data)
+        # ИЩЕМ PPTX ПО MIME TYPE
+        for var in reversed(variables):
 
-        # ищем pptx
-        for var in variables:
+            if not var:
+                continue
 
             payload = var.get("payload") or {}
 
-            url = payload.get("url") or ""
+            mime_type = payload.get("mime_type", "")
+            url = payload.get("url")
 
-            if ".pptx" in url.lower():
+            if (
+                "presentation" in mime_type.lower()
+                and url
+            ):
 
                 file_url = url
                 break
@@ -180,7 +186,7 @@ async def upload_template(request: Request):
             TEMPLATES_DIR
         )
 
-        # сохраняем шаблон
+        # сохраняем путь к шаблону
         state_file = os.path.join(
             STATE_DIR,
             f"{user_id}.txt"
@@ -231,19 +237,26 @@ async def upload_excel(request: Request):
         with open(state_file, "r", encoding="utf-8") as f:
             template_path = f.read()
 
-        # excel
+        # ищем excel
         file_url = None
 
-        for var in variables:
+        for var in reversed(variables):
 
             if not var:
                 continue
 
             payload = var.get("payload") or {}
 
+            mime_type = payload.get("mime_type", "")
             url = payload.get("url")
 
-            if url:
+            if (
+                (
+                    "spreadsheet" in mime_type.lower()
+                    or "excel" in mime_type.lower()
+                )
+                and url
+            ):
 
                 file_url = url
                 break
@@ -268,9 +281,9 @@ async def upload_excel(request: Request):
 
         full_url = f"{BASE_URL}/files/{zip_name}"
 
-        return PlainTextResponse(
-            f"Файлы готовы ✅\n\n{full_url}"
-        )
+        return {
+            "message": f"Файлы готовы ✅\n{full_url}"
+        }
 
     except Exception as e:
 
