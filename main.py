@@ -1,10 +1,11 @@
-from fastapi import FastAPI, Request, Header
-from fastapi.responses import PlainTextResponse, JSONResponse
+from fastapi import FastAPI, Header, Request
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 import json
 import os
 import shutil
+import subprocess
 import traceback
 import zipfile
 from pathlib import Path
@@ -13,6 +14,11 @@ from typing import Any
 import pandas as pd
 import requests
 from pptx import Presentation
+
+try:
+    import pymorphy3
+except Exception:
+    pymorphy3 = None
 
 
 app = FastAPI()
@@ -37,8 +43,19 @@ for directory in (TEMPLATES_DIR, EXCEL_DIR, OUTPUT_DIR, STATE_DIR):
 
 app.mount("/files", StaticFiles(directory=str(OUTPUT_DIR)), name="files")
 
+MORPH = None
 
-# ------------------ BASIC FILE HELPERS ------------------
+CASES = {
+    "nomn": {"name": "Именительный", "question": "кто? что?"},
+    "gent": {"name": "Родительный", "question": "кого? чего?"},
+    "datv": {"name": "Дательный", "question": "кому? чему?"},
+    "accs": {"name": "Винительный", "question": "кого? что?"},
+    "ablt": {"name": "Творительный", "question": "кем? чем?"},
+    "loct": {"name": "Предложный", "question": "о ком? о чем?"},
+}
+
+
+# ------------------ BASIC HELPERS ------------------
 
 def sanitize_filename(value: Any, fallback: str = "file") -> str:
     name = str(value or fallback).strip()
@@ -48,25 +65,62 @@ def sanitize_filename(value: Any, fallback: str = "file") -> str:
     return name[:120] or fallback
 
 
+def user_templates_dir(user_id: str) -> Path:
+    path = TEMPLATES_DIR / sanitize_filename(user_id, fallback="default")
+    path.mkdir(exist_ok=True)
+    return path
+
+
 def state_path(user_id: str) -> Path:
-    return STATE_DIR / f"{user_id}.json"
+    return STATE_DIR / f"{sanitize_filename(user_id, fallback='default')}.json"
+
+
+def normalize_state(state: dict) -> dict:
+    state.setdefault("templates", [])
+
+    # Migration from the first one-template version.
+    if state.get("template_path") and not state["templates"]:
+        state["templates"].append({
+            "name": state.get("template_name") or Path(state["template_path"]).name,
+            "path": state["template_path"],
+        })
+        state.pop("template_path", None)
+        state.pop("template_name", None)
+
+    return state
 
 
 def load_state(user_id: str) -> dict:
     path = state_path(user_id)
     if not path.exists():
-        return {}
+        return normalize_state({})
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return normalize_state(json.loads(path.read_text(encoding="utf-8")))
     except Exception:
-        return {}
+        return normalize_state({})
 
 
 def save_state(user_id: str, data: dict) -> None:
     state_path(user_id).write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
+        json.dumps(normalize_state(data), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def unique_path(directory: Path, filename: str) -> Path:
+    filename = sanitize_filename(filename)
+    path = directory / filename
+    if not path.exists():
+        return path
+
+    stem = path.stem
+    suffix = path.suffix
+    counter = 2
+    while True:
+        candidate = directory / f"{stem}_{counter}{suffix}"
+        if not candidate.exists():
+            return candidate
+        counter += 1
 
 
 def download_file(file_url: str, save_dir: Path, filename: str | None = None, force_ext: str | None = None):
@@ -77,19 +131,106 @@ def download_file(file_url: str, save_dir: Path, filename: str | None = None, fo
         filename = file_url.split("/")[-1].split("?")[0] or "file"
 
     filename = sanitize_filename(filename)
-
     if force_ext and not filename.lower().endswith(force_ext):
         filename = f"{filename}{force_ext}"
 
-    path = save_dir / filename
+    path = unique_path(save_dir, filename)
     path.write_bytes(response.content)
+    return path.name, path
 
-    return filename, path
+
+def format_value(value: Any) -> str:
+    if pd.isna(value):
+        return ""
+    return str(value)
 
 
-# ------------------ POWERPOINT GENERATION ------------------
+def template_list_text(templates: list[dict]) -> str:
+    if not templates:
+        return "У тебя пока нет загруженных шаблонов."
 
-def replace_text_in_shape(shape, row: pd.Series, columns) -> None:
+    lines = ["Твои шаблоны:"]
+    for index, template in enumerate(templates, start=1):
+        lines.append(f"{index}. {template.get('name') or 'template.pptx'}")
+    return "\n".join(lines)
+
+
+def delete_template_file(template: dict) -> None:
+    path = Path(template.get("path") or "")
+    try:
+        if path.exists() and path.is_file():
+            path.unlink()
+    except Exception:
+        pass
+
+
+# ------------------ RUSSIAN CASES ------------------
+
+def get_morph():
+    global MORPH
+    if MORPH is not None:
+        return MORPH
+    if pymorphy3 is None:
+        raise RuntimeError("Библиотека pymorphy3 не установлена. Проверь requirements.txt и redeploy.")
+    MORPH = pymorphy3.MorphAnalyzer()
+    return MORPH
+
+
+def preserve_case(original: str, changed: str) -> str:
+    if original.isupper():
+        return changed.upper()
+    if original[:1].isupper():
+        return changed.capitalize()
+    return changed
+
+
+def inflect_word(word: str, case_code: str) -> str:
+    if case_code == "nomn" or not word:
+        return word
+
+    morph = get_morph()
+    parsed = morph.parse(word)[0]
+    inflected = parsed.inflect({case_code})
+    if not inflected:
+        return word
+    return preserve_case(word, inflected.word)
+
+
+def inflect_name_part(part: str, case_code: str) -> str:
+    if "-" in part:
+        return "-".join(inflect_word(piece, case_code) for piece in part.split("-"))
+    return inflect_word(part, case_code)
+
+
+def inflect_fio(value: Any, case_code: str) -> str:
+    text = format_value(value).strip()
+    if case_code == "nomn" or not text:
+        return text
+    return " ".join(inflect_name_part(part, case_code) for part in text.split())
+
+
+def should_inflect_column(column: Any) -> bool:
+    name = str(column).lower().replace(".", "").replace(" ", "")
+    return name in {
+        "фио",
+        "фамилияимяотчество",
+        "фамилия",
+        "имя",
+        "отчество",
+        "полноеимя",
+    }
+
+
+def row_value_for_column(row: pd.Series, column: Any, case_code: str) -> str:
+    value = row[column]
+    if should_inflect_column(column):
+        return inflect_fio(value, case_code)
+    return format_value(value)
+
+
+# ------------------ POWERPOINT AND PDF GENERATION ------------------
+
+def replace_text_in_shape(shape, row: pd.Series, columns, case_code: str) -> None:
     if not shape.has_text_frame:
         return
 
@@ -99,10 +240,10 @@ def replace_text_in_shape(shape, row: pd.Series, columns) -> None:
             continue
 
         replaced = False
-        for col in columns:
-            placeholder = str(col).strip()
+        for column in columns:
+            placeholder = str(column).strip()
             if placeholder in full_text:
-                full_text = full_text.replace(placeholder, str(row[col]))
+                full_text = full_text.replace(placeholder, row_value_for_column(row, column, case_code))
                 replaced = True
 
         if replaced and paragraph.runs:
@@ -111,8 +252,38 @@ def replace_text_in_shape(shape, row: pd.Series, columns) -> None:
             paragraph.runs[0].text = full_text
 
 
-def generate_pptx(template_path: Path, excel_path: Path, user_id: str) -> str:
-    user_output_dir = OUTPUT_DIR / user_id
+def libreoffice_binary() -> str:
+    binary = shutil.which("libreoffice") or shutil.which("soffice")
+    if not binary:
+        raise RuntimeError(
+            "Не найден LibreOffice для конвертации PPTX в PDF. "
+            "В проект добавлен nixpacks.toml, после загрузки на Railway сделай redeploy."
+        )
+    return binary
+
+
+def convert_pptx_to_pdf(pptx_path: Path, output_dir: Path) -> Path:
+    command = [
+        libreoffice_binary(),
+        "--headless",
+        "--convert-to",
+        "pdf",
+        "--outdir",
+        str(output_dir),
+        str(pptx_path),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=180)
+    if result.returncode != 0:
+        raise RuntimeError(f"LibreOffice не смог сделать PDF:\n{result.stderr or result.stdout}")
+
+    pdf_path = output_dir / f"{pptx_path.stem}.pdf"
+    if not pdf_path.exists():
+        raise RuntimeError("PDF не появился после конвертации. Проверь логи Railway.")
+    return pdf_path
+
+
+def generate_pdf_zip(template_path: Path, excel_path: Path, user_id: str, case_code: str) -> str:
+    user_output_dir = OUTPUT_DIR / sanitize_filename(user_id, fallback="default")
 
     if user_output_dir.exists():
         shutil.rmtree(user_output_dir)
@@ -122,25 +293,27 @@ def generate_pptx(template_path: Path, excel_path: Path, user_id: str) -> str:
     if df.empty:
         raise ValueError("Excel пустой. Добавь хотя бы одну строку с данными.")
 
-    generated_files = []
+    generated_pdfs = []
 
-    for _, row in df.iterrows():
+    for index, row in df.iterrows():
         prs = Presentation(str(template_path))
 
         for slide in prs.slides:
             for shape in slide.shapes:
-                replace_text_in_shape(shape, row, df.columns)
+                replace_text_in_shape(shape, row, df.columns, case_code)
 
-        safe_name = sanitize_filename(row[df.columns[0]], fallback="presentation")
-        pptx_path = user_output_dir / f"{safe_name}.pptx"
+        safe_name = sanitize_filename(row[df.columns[0]], fallback=f"presentation_{index + 1}")
+        pptx_path = unique_path(user_output_dir, f"{safe_name}.pptx")
         prs.save(str(pptx_path))
-        generated_files.append(pptx_path)
 
-    zip_name = f"{user_id}_result.zip"
+        pdf_path = convert_pptx_to_pdf(pptx_path, user_output_dir)
+        generated_pdfs.append(pdf_path)
+
+    zip_name = f"{sanitize_filename(user_id, fallback='default')}_result.zip"
     zip_path = OUTPUT_DIR / zip_name
 
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-        for file in generated_files:
+        for file in generated_pdfs:
             zipf.write(file, arcname=file.name)
 
     return zip_name
@@ -155,24 +328,37 @@ def max_headers() -> dict:
 
 
 def inline_keyboard(buttons: list[list[dict]]) -> dict:
-    return {
-        "type": "inline_keyboard",
-        "payload": {"buttons": buttons},
-    }
+    return {"type": "inline_keyboard", "payload": {"buttons": buttons}}
 
 
 def main_menu_keyboard() -> dict:
     return inline_keyboard([
-        [
-            {"type": "callback", "text": "Загрузить шаблон", "payload": "upload_template"},
-        ],
-        [
-            {"type": "callback", "text": "Создать грамоты", "payload": "upload_excel"},
-        ],
-        [
-            {"type": "callback", "text": "Помощь", "payload": "help"},
-        ],
+        [{"type": "callback", "text": "Мои шаблоны", "payload": "my_templates"}],
+        [{"type": "callback", "text": "Сгенерировать", "payload": "generate"}],
+        [{"type": "callback", "text": "Инструкция", "payload": "instruction"}],
     ])
+
+
+def templates_keyboard() -> dict:
+    return inline_keyboard([
+        [{"type": "callback", "text": "Добавить шаблон", "payload": "add_template"}],
+        [{"type": "callback", "text": "Удалить шаблон", "payload": "delete_template"}],
+        [{"type": "callback", "text": "Главное меню", "payload": "main_menu"}],
+    ])
+
+
+def back_to_menu_keyboard() -> dict:
+    return inline_keyboard([
+        [{"type": "callback", "text": "Главное меню", "payload": "main_menu"}],
+    ])
+
+
+def case_keyboard() -> dict:
+    rows = []
+    for code, info in CASES.items():
+        rows.append([{"type": "callback", "text": info["name"], "payload": f"case_{code}"}])
+    rows.append([{"type": "callback", "text": "Главное меню", "payload": "main_menu"}])
+    return inline_keyboard(rows)
 
 
 def send_max_message(user_id: str, text: str, attachments: list[dict] | None = None) -> None:
@@ -180,11 +366,7 @@ def send_max_message(user_id: str, text: str, attachments: list[dict] | None = N
         f"{MAX_API_URL}/messages",
         params={"user_id": user_id},
         headers=max_headers(),
-        json={
-            "text": text,
-            "attachments": attachments or [],
-            "link": None,
-        },
+        json={"text": text, "attachments": attachments or [], "link": None},
         timeout=30,
     )
     response.raise_for_status()
@@ -229,9 +411,7 @@ def extract_file_attachment(update: dict, allowed_extensions: list[str]) -> tupl
 
     found = []
     for attachment in attachments:
-        if not isinstance(attachment, dict):
-            continue
-        if attachment.get("type") != "file":
+        if not isinstance(attachment, dict) or attachment.get("type") != "file":
             continue
 
         payload = attachment.get("payload") or {}
@@ -249,67 +429,149 @@ def extract_file_attachment(update: dict, allowed_extensions: list[str]) -> tupl
 
 # ------------------ MAX BOT FLOW ------------------
 
-async def handle_max_update(update: dict) -> None:
-    user_id = extract_user_id(update)
-    if not user_id:
+def send_main_menu(user_id: str) -> None:
+    send_max_message(user_id, "Выбери действие:", [main_menu_keyboard()])
+
+
+def send_instruction(user_id: str) -> None:
+    send_max_message(
+        user_id,
+        "Инструкция:\n\n"
+        "1. Сначала открой «Мои шаблоны» и добавь PPTX-шаблон.\n"
+        "2. В шаблоне напиши плейсхолдеры обычным текстом: ФИО, Класс, Дата, Номинация.\n"
+        "3. В Excel сделай колонки с такими же названиями: ФИО, Класс, Дата, Номинация.\n"
+        "4. Каждая строка Excel станет отдельной грамотой.\n"
+        "5. Нажми «Сгенерировать», выбери номер шаблона, отправь Excel и выбери падеж.\n"
+        "6. В конце бот пришлет ссылку на ZIP-архив с PDF-файлами.\n\n"
+        "Для склонения ФИО лучше использовать колонку «ФИО». "
+        "Автоматические падежи могут ошибаться на редких или сложных ФИО.",
+        [back_to_menu_keyboard()],
+    )
+
+
+def selected_template_from_state(state: dict) -> dict | None:
+    templates = state.get("templates") or []
+    index = state.get("selected_template_index")
+    if not isinstance(index, int) or index < 0 or index >= len(templates):
+        return None
+    return templates[index]
+
+
+async def handle_callback(update: dict, user_id: str) -> None:
+    callback = update.get("callback") or {}
+    payload = callback.get("payload")
+    callback_id = callback.get("callback_id")
+    state = load_state(user_id)
+
+    if payload == "main_menu":
+        state["mode"] = None
+        save_state(user_id, state)
+        answer_callback(callback_id, "Меню")
+        send_main_menu(user_id)
         return
 
-    update_type = update.get("update_type")
+    if payload == "my_templates":
+        state["mode"] = None
+        save_state(user_id, state)
+        answer_callback(callback_id, "Шаблоны")
+        send_max_message(user_id, template_list_text(state["templates"]), [templates_keyboard()])
+        return
 
-    if update_type == "bot_started":
+    if payload == "add_template":
+        state["mode"] = "waiting_template"
+        save_state(user_id, state)
+        answer_callback(callback_id, "Жду PPTX")
+        send_max_message(user_id, "Отправь PPTX-шаблон одним файлом.", [back_to_menu_keyboard()])
+        return
+
+    if payload == "delete_template":
+        if not state["templates"]:
+            answer_callback(callback_id, "Нет шаблонов")
+            send_max_message(user_id, "Удалять пока нечего: шаблоны еще не загружены.", [back_to_menu_keyboard()])
+            return
+
+        state["mode"] = "waiting_delete_template_number"
+        save_state(user_id, state)
+        answer_callback(callback_id, "Жду номер")
         send_max_message(
             user_id,
-            "Привет! Я помогу сделать грамоты из PPTX-шаблона и Excel-файла.\n\n"
-            "1. Нажми «Загрузить шаблон» и отправь PPTX.\n"
-            "2. Потом нажми «Создать грамоты» и отправь Excel.",
-            [main_menu_keyboard()],
+            f"{template_list_text(state['templates'])}\n\n"
+            "Отправь цифру шаблона, который нужно удалить.",
+            [back_to_menu_keyboard()],
         )
         return
 
-    if update_type == "message_callback":
-        callback = update.get("callback") or {}
-        payload = callback.get("payload")
-        callback_id = callback.get("callback_id")
-        state = load_state(user_id)
-
-        if payload == "upload_template":
-            state["mode"] = "waiting_template"
-            save_state(user_id, state)
-            answer_callback(callback_id, "Жду PPTX")
-            send_max_message(user_id, "Отправь PPTX-шаблон одним файлом.")
-            return
-
-        if payload == "upload_excel":
-            template_path = state.get("template_path")
-            if not template_path or not Path(template_path).exists():
-                answer_callback(callback_id, "Сначала нужен шаблон")
-                send_max_message(user_id, "Сначала загрузи PPTX-шаблон.", [main_menu_keyboard()])
-                return
-
-            state["mode"] = "waiting_excel"
-            save_state(user_id, state)
-            answer_callback(callback_id, "Жду Excel")
-            send_max_message(user_id, "Отправь Excel-файл .xlsx или .xls.")
-            return
-
-        if payload == "help":
-            answer_callback(callback_id, "Помощь")
+    if payload == "generate":
+        if not state["templates"]:
+            answer_callback(callback_id, "Нет шаблонов")
             send_max_message(
                 user_id,
-                "Как подготовить файлы:\n\n"
-                "В PPTX напиши слова-плейсхолдеры, например: Имя, Класс, Дата.\n"
-                "В Excel сделай такие же названия колонок: Имя, Класс, Дата.\n"
-                "Каждая строка Excel станет отдельной грамотой.",
-                [main_menu_keyboard()],
+                "Сначала добавь хотя бы один PPTX-шаблон в разделе «Мои шаблоны».",
+                [templates_keyboard()],
             )
             return
 
-    if update_type != "message_created":
+        state["mode"] = "waiting_generate_template_number"
+        save_state(user_id, state)
+        answer_callback(callback_id, "Выбери шаблон")
+        send_max_message(
+            user_id,
+            f"{template_list_text(state['templates'])}\n\n"
+            "Отправь цифру нужного шаблона.",
+            [back_to_menu_keyboard()],
+        )
         return
 
-    text = extract_text(update).lower()
-    if text in {"/start", "старт", "меню"}:
-        send_max_message(user_id, "Главное меню:", [main_menu_keyboard()])
+    if payload == "instruction":
+        answer_callback(callback_id, "Инструкция")
+        send_instruction(user_id)
+        return
+
+    if payload and payload.startswith("case_"):
+        case_code = payload.replace("case_", "", 1)
+        if case_code not in CASES:
+            answer_callback(callback_id, "Неизвестный падеж")
+            return
+
+        template = selected_template_from_state(state)
+        excel_path = state.get("excel_path")
+        if not template or not excel_path:
+            answer_callback(callback_id, "Нет файлов")
+            send_max_message(user_id, "Не хватает шаблона или Excel. Начни генерацию заново.", [main_menu_keyboard()])
+            return
+
+        template_path = Path(template["path"])
+        if not template_path.exists() or not Path(excel_path).exists():
+            answer_callback(callback_id, "Файл не найден")
+            send_max_message(user_id, "Один из файлов не найден. Загрузи шаблон и Excel заново.", [main_menu_keyboard()])
+            return
+
+        answer_callback(callback_id, "Генерирую")
+        send_max_message(
+            user_id,
+            f"Падеж выбран: {CASES[case_code]['name']}.\n"
+            "Генерирую PDF-файлы и собираю ZIP. Это может занять немного времени.",
+        )
+
+        zip_name = generate_pdf_zip(template_path, Path(excel_path), user_id, case_code)
+        state["mode"] = None
+        state.pop("excel_path", None)
+        state.pop("selected_template_index", None)
+        save_state(user_id, state)
+
+        full_url = f"{BASE_URL}/files/{zip_name}"
+        send_max_message(user_id, f"Файлы готовы.\n\nСкачать ZIP:\n{full_url}", [main_menu_keyboard()])
+
+
+async def handle_message(update: dict, user_id: str) -> None:
+    text = extract_text(update)
+    text_lower = text.lower()
+
+    if text_lower in {"/start", "старт", "меню", "главное меню"}:
+        state = load_state(user_id)
+        state["mode"] = None
+        save_state(user_id, state)
+        send_main_menu(user_id)
         return
 
     state = load_state(user_id)
@@ -318,61 +580,122 @@ async def handle_max_update(update: dict) -> None:
     if mode == "waiting_template":
         file_url, filename, _ = extract_file_attachment(update, [".pptx"])
         if not file_url:
-            send_max_message(user_id, "Я не вижу PPTX-файл. Нажми скрепку и отправь именно .pptx.")
+            send_max_message(user_id, "Я не вижу PPTX-файл. Отправь именно файл с расширением .pptx.", [back_to_menu_keyboard()])
             return
 
-        _, template_path = download_file(file_url, TEMPLATES_DIR, filename=filename, force_ext=".pptx")
+        _, template_path = download_file(
+            file_url,
+            user_templates_dir(user_id),
+            filename=filename,
+            force_ext=".pptx",
+        )
 
         try:
             prs = Presentation(str(template_path))
             slide_count = len(prs.slides)
         except Exception as exc:
-            send_max_message(user_id, f"Файл не похож на нормальный PPTX:\n{exc}")
+            send_max_message(user_id, f"Файл не похож на нормальный PPTX:\n{exc}", [back_to_menu_keyboard()])
             return
 
-        state["template_path"] = str(template_path)
-        state["template_name"] = template_path.name
+        state["templates"].append({"name": template_path.name, "path": str(template_path)})
         state["mode"] = None
         save_state(user_id, state)
 
         send_max_message(
             user_id,
-            f"Шаблон загружен.\nФайл: {template_path.name}\nСлайдов: {slide_count}\n\n"
-            "Теперь нажми «Создать грамоты» и отправь Excel.",
-            [main_menu_keyboard()],
+            f"Шаблон добавлен.\nФайл: {template_path.name}\nСлайдов: {slide_count}",
+            [back_to_menu_keyboard()],
+        )
+        return
+
+    if mode == "waiting_delete_template_number":
+        if not text.isdigit():
+            send_max_message(user_id, "Отправь только цифру шаблона из списка.", [back_to_menu_keyboard()])
+            return
+
+        index = int(text) - 1
+        templates = state["templates"]
+        if index < 0 or index >= len(templates):
+            send_max_message(user_id, "Такого номера нет. Проверь список и отправь цифру ещё раз.", [back_to_menu_keyboard()])
+            return
+
+        removed = templates.pop(index)
+        delete_template_file(removed)
+        state["mode"] = None
+        save_state(user_id, state)
+
+        send_max_message(user_id, f"Шаблон удалён: {removed.get('name')}", [back_to_menu_keyboard()])
+        return
+
+    if mode == "waiting_generate_template_number":
+        if not text.isdigit():
+            send_max_message(user_id, "Отправь только цифру нужного шаблона.", [back_to_menu_keyboard()])
+            return
+
+        index = int(text) - 1
+        templates = state["templates"]
+        if index < 0 or index >= len(templates):
+            send_max_message(user_id, "Такого номера нет. Проверь список и отправь цифру ещё раз.", [back_to_menu_keyboard()])
+            return
+
+        template_path = Path(templates[index]["path"])
+        if not template_path.exists():
+            send_max_message(user_id, "Этот шаблон не найден на сервере. Удали его и загрузи заново.", [templates_keyboard()])
+            return
+
+        state["selected_template_index"] = index
+        state["mode"] = "waiting_excel"
+        save_state(user_id, state)
+
+        send_max_message(
+            user_id,
+            f"Выбран шаблон: {templates[index]['name']}.\n\n"
+            "Теперь отправь Excel-файл .xlsx или .xls.",
+            [back_to_menu_keyboard()],
         )
         return
 
     if mode == "waiting_excel":
-        template_path = state.get("template_path")
-        if not template_path or not Path(template_path).exists():
-            state["mode"] = None
-            save_state(user_id, state)
-            send_max_message(user_id, "Шаблон не найден. Загрузи PPTX заново.", [main_menu_keyboard()])
-            return
-
         file_url, filename, ext = extract_file_attachment(update, [".xlsx", ".xls"])
         if not file_url:
-            send_max_message(user_id, "Я не вижу Excel-файл. Отправь .xlsx или .xls.")
+            send_max_message(user_id, "Я не вижу Excel-файл. Отправь .xlsx или .xls.", [back_to_menu_keyboard()])
             return
 
-        _, excel_path = download_file(file_url, EXCEL_DIR, filename=filename, force_ext=ext or ".xlsx")
-        send_max_message(user_id, "Excel получил. Генерирую грамоты, это может занять немного времени.")
+        user_excel_dir = EXCEL_DIR / sanitize_filename(user_id, fallback="default")
+        user_excel_dir.mkdir(exist_ok=True)
+        _, excel_path = download_file(file_url, user_excel_dir, filename=filename, force_ext=ext or ".xlsx")
 
-        zip_name = generate_pptx(
-            template_path=Path(template_path),
-            excel_path=excel_path,
-            user_id=user_id,
-        )
-
-        state["mode"] = None
+        state["excel_path"] = str(excel_path)
+        state["mode"] = "waiting_case"
         save_state(user_id, state)
 
-        full_url = f"{BASE_URL}/files/{zip_name}"
-        send_max_message(user_id, f"Файлы готовы.\n\nСкачать ZIP:\n{full_url}", [main_menu_keyboard()])
+        send_max_message(user_id, "Файл Excel загружен, выбери нужный падеж:", [case_keyboard()])
         return
 
-    send_max_message(user_id, "Выбери действие в меню:", [main_menu_keyboard()])
+    if mode == "waiting_case":
+        send_max_message(user_id, "Выбери падеж кнопкой под предыдущим сообщением.", [case_keyboard()])
+        return
+
+    send_main_menu(user_id)
+
+
+async def handle_max_update(update: dict) -> None:
+    user_id = extract_user_id(update)
+    if not user_id:
+        return
+
+    update_type = update.get("update_type")
+
+    if update_type == "bot_started":
+        send_main_menu(user_id)
+        return
+
+    if update_type == "message_callback":
+        await handle_callback(update, user_id)
+        return
+
+    if update_type == "message_created":
+        await handle_message(update, user_id)
 
 
 # ------------------ MAX WEBHOOK ENDPOINTS ------------------
@@ -458,7 +781,7 @@ async def upload_template(request: Request):
         if not file_url:
             return PlainTextResponse("PPTX не найден.")
 
-        filename, template_path = download_file(file_url, TEMPLATES_DIR, force_ext=".pptx")
+        filename, template_path = download_file(file_url, user_templates_dir(user_id), force_ext=".pptx")
 
         try:
             prs = Presentation(str(template_path))
@@ -467,13 +790,12 @@ async def upload_template(request: Request):
             return PlainTextResponse(f"Файл не является валидным PPTX:\n{exc}")
 
         state = load_state(user_id)
-        state["template_path"] = str(template_path)
-        state["template_name"] = filename
+        state["templates"].append({"name": filename, "path": str(template_path)})
         state["mode"] = None
         save_state(user_id, state)
 
         return PlainTextResponse(
-            f"Шаблон загружен ✅\n"
+            f"Шаблон загружен.\n"
             f"Файл: {filename} ({slide_count} слайдов)\n\n"
             f"Теперь отправь Excel файл (.xlsx)"
         )
@@ -491,23 +813,24 @@ async def upload_excel(request: Request):
         user_id = str(contact.get("id", "default"))
 
         state = load_state(user_id)
-        template_path = state.get("template_path")
-
-        if not template_path:
+        if not state["templates"]:
             return PlainTextResponse("Сначала загрузи шаблон PPTX")
 
-        if not Path(template_path).exists():
+        template_path = Path(state["templates"][-1]["path"])
+        if not template_path.exists():
             return PlainTextResponse("Шаблон не найден на диске. Загрузи шаблон заново.")
 
         file_url, ext = extract_watbot_file_url(variables, [".xlsx", ".xls"])
         if not file_url:
             return PlainTextResponse("Excel не найден.")
 
-        _, excel_path = download_file(file_url, EXCEL_DIR, force_ext=ext or ".xlsx")
-        zip_name = generate_pptx(Path(template_path), excel_path, user_id)
+        user_excel_dir = EXCEL_DIR / sanitize_filename(user_id, fallback="default")
+        user_excel_dir.mkdir(exist_ok=True)
+        _, excel_path = download_file(file_url, user_excel_dir, force_ext=ext or ".xlsx")
+        zip_name = generate_pdf_zip(template_path, excel_path, user_id, "nomn")
 
         full_url = f"{BASE_URL}/files/{zip_name}"
-        return PlainTextResponse(f"Файлы готовы ✅\n\n{full_url}")
+        return PlainTextResponse(f"Файлы готовы.\n\n{full_url}")
 
     except Exception as exc:
         return PlainTextResponse(f"Ошибка сервера:\n{exc}\n\n{traceback.format_exc()}")
@@ -518,3 +841,4 @@ async def upload_excel(request: Request):
 @app.get("/", response_class=PlainTextResponse)
 def status():
     return "бот работает"
+
