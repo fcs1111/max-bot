@@ -11,6 +11,10 @@ RUN apt-get update \
         fontconfig \
         fonts-dejavu \
         fonts-liberation \
+        fonts-noto-core \
+        fonts-crosextra-carlito \
+        fonts-crosextra-caladea \
+        fonts-freefont-ttf \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
@@ -19,4 +23,3 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}"]
-
