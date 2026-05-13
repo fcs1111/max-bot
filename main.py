@@ -185,29 +185,73 @@ def preserve_case(original: str, changed: str) -> str:
     return changed
 
 
-def inflect_word(word: str, case_code: str) -> str:
+def infer_gender_from_fio_parts(parts: list[str]) -> str | None:
+    for part in reversed(parts):
+        clean = part.strip("- ").lower()
+        if clean.endswith(("вна", "чна", "кызы")):
+            return "femn"
+        if clean.endswith(("вич", "ич", "оглы")):
+            return "masc"
+
+    morph = get_morph()
+    votes = {"femn": 0, "masc": 0}
+    for part in parts:
+        clean = part.strip("- ")
+        if not clean:
+            continue
+        parsed = morph.parse(clean)[0]
+        if "femn" in parsed.tag:
+            votes["femn"] += 1
+        if "masc" in parsed.tag:
+            votes["masc"] += 1
+
+    if votes["femn"] > votes["masc"]:
+        return "femn"
+    if votes["masc"] > votes["femn"]:
+        return "masc"
+    return None
+
+
+def inflect_word(word: str, case_code: str, gender: str | None = None) -> str:
     if case_code == "nomn" or not word:
         return word
 
     morph = get_morph()
-    parsed = morph.parse(word)[0]
-    inflected = parsed.inflect({case_code})
+    parses = morph.parse(word)
+    parsed = parses[0]
+
+    if gender:
+        gender_parses = [item for item in parses if gender in item.tag]
+        if gender_parses:
+            parsed = gender_parses[0]
+
+    required = {case_code}
+    if gender:
+        required.add(gender)
+
+    inflected = parsed.inflect(required)
+    if not inflected and gender:
+        inflected = parsed.inflect({case_code})
+
     if not inflected:
         return word
     return preserve_case(word, inflected.word)
 
 
-def inflect_name_part(part: str, case_code: str) -> str:
+def inflect_name_part(part: str, case_code: str, gender: str | None = None) -> str:
     if "-" in part:
-        return "-".join(inflect_word(piece, case_code) for piece in part.split("-"))
-    return inflect_word(part, case_code)
+        return "-".join(inflect_word(piece, case_code, gender) for piece in part.split("-"))
+    return inflect_word(part, case_code, gender)
 
 
 def inflect_fio(value: Any, case_code: str) -> str:
     text = format_value(value).strip()
     if case_code == "nomn" or not text:
         return text
-    return " ".join(inflect_name_part(part, case_code) for part in text.split())
+
+    parts = text.split()
+    gender = infer_gender_from_fio_parts(parts)
+    return " ".join(inflect_name_part(part, case_code, gender) for part in parts)
 
 
 def normalize_placeholder_name(value: Any) -> str:
@@ -923,3 +967,10 @@ def debug():
         f"pymorphy3: {'установлен' if pymorphy3 else 'не установлен'}\n"
         f"LibreOffice: {libreoffice}\n"
     )
+
+
+@app.get("/debug_inflect", response_class=PlainTextResponse)
+def debug_inflect(fio: str, case: str = "datv"):
+    if case not in CASES:
+        return f"Неизвестный падеж: {case}"
+    return inflect_fio(fio, case)
