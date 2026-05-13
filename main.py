@@ -210,8 +210,14 @@ def inflect_fio(value: Any, case_code: str) -> str:
     return " ".join(inflect_name_part(part, case_code) for part in text.split())
 
 
+def normalize_placeholder_name(value: Any) -> str:
+    name = str(value).strip().lower()
+    name = name.strip("%{}[]() ")
+    return name.replace(".", "").replace(" ", "")
+
+
 def should_inflect_column(column: Any) -> bool:
-    name = str(column).lower().replace(".", "").replace(" ", "")
+    name = normalize_placeholder_name(column)
     return name in {
         "фио",
         "фамилияимяотчество",
@@ -231,20 +237,57 @@ def row_value_for_column(row: pd.Series, column: Any, case_code: str) -> str:
 
 # ------------------ POWERPOINT AND PDF GENERATION ------------------
 
+def placeholder_for_column(column: Any) -> str:
+    name = str(column).strip()
+    if name.startswith("%") and name.endswith("%"):
+        return name
+    return f"%{name}%"
+
+
+def build_replacements(row: pd.Series, columns, case_code: str) -> list[tuple[str, str]]:
+    replacements = []
+    for column in columns:
+        placeholder = placeholder_for_column(column)
+        replacements.append((placeholder, row_value_for_column(row, column, case_code)))
+
+    # Longer placeholders first prevents partial replacement surprises.
+    replacements.sort(key=lambda item: len(item[0]), reverse=True)
+    return replacements
+
+
 def replace_text_in_shape(shape, row: pd.Series, columns, case_code: str) -> None:
     if not shape.has_text_frame:
         return
 
+    replacements = build_replacements(row, columns, case_code)
+
     for paragraph in shape.text_frame.paragraphs:
+        # First try replacing inside each run. This preserves PowerPoint formatting
+        # much better when the placeholder is not split across multiple runs.
+        replaced_inside_runs = False
+        for run in paragraph.runs:
+            original_text = run.text
+            new_text = original_text
+            for placeholder, value in replacements:
+                if placeholder in new_text:
+                    new_text = new_text.replace(placeholder, value)
+
+            if new_text != original_text:
+                run.text = new_text
+                replaced_inside_runs = True
+
+        if replaced_inside_runs:
+            continue
+
+        # Fallback for rare cases where PowerPoint split a placeholder across runs.
         full_text = "".join(run.text for run in paragraph.runs)
         if not full_text:
             continue
 
         replaced = False
-        for column in columns:
-            placeholder = str(column).strip()
+        for placeholder, value in replacements:
             if placeholder in full_text:
-                full_text = full_text.replace(placeholder, row_value_for_column(row, column, case_code))
+                full_text = full_text.replace(placeholder, value)
                 replaced = True
 
         if replaced and paragraph.runs:
@@ -456,12 +499,12 @@ def send_instruction(user_id: str) -> None:
         user_id,
         "Инструкция:\n\n"
         "1. Сначала открой «Мои шаблоны» и добавь PPTX-шаблон.\n"
-        "2. В шаблоне напиши плейсхолдеры обычным текстом: ФИО, Класс, Дата, Номинация.\n"
-        "3. В Excel сделай колонки с такими же названиями: ФИО, Класс, Дата, Номинация.\n"
+        "2. В шаблоне напиши плейсхолдеры через проценты: %ФИО%, %КЛАСС%, %ДАТА%, %НОМИНАЦИЯ%.\n"
+        "3. В Excel сделай колонки с такими же названиями: %ФИО%, %КЛАСС%, %ДАТА%, %НОМИНАЦИЯ%.\n"
         "4. Каждая строка Excel станет отдельной грамотой.\n"
         "5. Нажми «Сгенерировать», выбери номер шаблона, отправь Excel и выбери падеж.\n"
         "6. В конце бот пришлет ссылку на ZIP-архив с PDF-файлами.\n\n"
-        "Для склонения ФИО лучше использовать колонку «ФИО». "
+        "Для склонения ФИО используй колонку %ФИО%. "
         "Автоматические падежи могут ошибаться на редких или сложных ФИО.",
         [back_to_menu_keyboard()],
     )
