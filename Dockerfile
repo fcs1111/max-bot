@@ -39,10 +39,12 @@ COPY . .
 RUN mkdir -p /usr/local/share/fonts/custom \
              /usr/share/fonts/truetype/custom \
              /root/.fonts \
+             /usr/lib/libreoffice/share/fonts/truetype/custom \
     && if [ -d /app/fonts ]; then \
          cp -r /app/fonts/. /usr/local/share/fonts/custom/; \
          cp -r /app/fonts/. /usr/share/fonts/truetype/custom/; \
          cp -r /app/fonts/. /root/.fonts/; \
+         cp -r /app/fonts/. /usr/lib/libreoffice/share/fonts/truetype/custom/; \
        fi \
     && mkdir -p /etc/fonts/conf.d \
     && cp /app/fontconfig/99-custom-font-fallbacks.conf /etc/fonts/conf.d/99-custom-font-fallbacks.conf 2>/dev/null || true \
