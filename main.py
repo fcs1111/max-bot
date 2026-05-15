@@ -505,28 +505,55 @@ def libreoffice_binary() -> str:
 
 
 def convert_pptx_to_pdf(pptx_path: Path, output_dir: Path) -> Path:
-    lo_profile = "/tmp/lo_profile_fixed"
-    command = [
-        libreoffice_binary(),
-        "--headless",
-        "--norestore",
-        "--nofirststartwizard",
-        f"-env:UserInstallation=file://{lo_profile}",
-        "--convert-to", "pdf:impress_pdf_Export",
-        "--outdir", str(output_dir),
-        str(pptx_path),
-    ]
-    env = os.environ.copy()
-    env["HOME"] = "/tmp"
-    env["TMPDIR"] = "/tmp"
+    api_key = os.getenv("CLOUDCONVERT_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("CLOUDCONVERT_API_KEY не задан в Railway Variables")
 
-    result = subprocess.run(command, capture_output=True, text=True, timeout=180, env=env)
-    if result.returncode != 0:
-        raise RuntimeError(f"LibreOffice error:\n{result.stderr or result.stdout}")
+    headers = {"Authorization": f"Bearer {api_key}"}
 
+    # Создаём задачу
+    job = requests.post("https://api.cloudconvert.com/v2/jobs", headers=headers, json={
+        "tasks": {
+            "upload": {"operation": "import/upload"},
+            "convert": {
+                "operation": "convert",
+                "input": "upload",
+                "output_format": "pdf",
+                "input_format": "pptx",
+            },
+            "export": {"operation": "export/url", "input": "convert"},
+        }
+    }, timeout=30).json()
+
+    job_id = job["data"]["id"]
+    upload_task = next(t for t in job["data"]["tasks"] if t["name"] == "upload")
+    upload_url = upload_task["result"]["form"]["url"]
+    upload_params = upload_task["result"]["form"]["parameters"]
+
+    # Загружаем PPTX
+    with open(pptx_path, "rb") as f:
+        requests.post(upload_url, data=upload_params, files={"file": f}, timeout=60)
+
+    # Ждём результат
+    import time
+    for _ in range(30):
+        time.sleep(3)
+        status = requests.get(
+            f"https://api.cloudconvert.com/v2/jobs/{job_id}",
+            headers=headers, timeout=15
+        ).json()
+        job_status = status["data"]["status"]
+        if job_status == "finished":
+            break
+        if job_status == "error":
+            raise RuntimeError(f"CloudConvert ошибка: {status}")
+
+    # Скачиваем PDF
+    export_task = next(t for t in status["data"]["tasks"] if t["name"] == "export")
+    pdf_url = export_task["result"]["files"][0]["url"]
     pdf_path = output_dir / f"{pptx_path.stem}.pdf"
-    if not pdf_path.exists():
-        raise RuntimeError("PDF не появился после конвертации.")
+    pdf_path.write_bytes(requests.get(pdf_url, timeout=60).content)
+
     return pdf_path
 
 from pptx.enum.text import MSO_AUTO_SIZE
