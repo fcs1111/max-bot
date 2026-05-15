@@ -34,6 +34,40 @@ except Exception:
     PetrovichGenderDetector = None
     NamePart = None
 
+def warmup_libreoffice():
+    """Прогревает профиль LibreOffice при старте — без этого он не видит шрифты."""
+    lo = shutil.which("libreoffice") or shutil.which("soffice")
+    if not lo:
+        return
+    
+    lo_profile = Path("/tmp/lo_profile_fixed")
+    lo_profile.mkdir(parents=True, exist_ok=True)
+    
+    # Создаём минимальный PPTX для прогрева
+    warmup_pptx = Path("/tmp/warmup.pptx")
+    try:
+        from pptx import Presentation as _Prs
+        prs = _Prs()
+        prs.save(str(warmup_pptx))
+    except Exception:
+        return
+    
+    # Запускаем LO — он построит кэш шрифтов в профиле
+    subprocess.run([
+        lo,
+        "--headless",
+        "--norestore", 
+        "--nofirststartwizard",
+        f"-env:UserInstallation=file://{lo_profile}",
+        "--convert-to", "pdf:impress_pdf_Export",
+        "--outdir", "/tmp",
+        str(warmup_pptx),
+    ], capture_output=True, timeout=60,
+       env={**os.environ, "HOME": "/tmp", "TMPDIR": "/tmp"})
+    
+    print("LibreOffice warmup done")
+
+warmup_libreoffice()  # запускается один раз при старте сервера
 
 app = FastAPI()
 
@@ -471,19 +505,7 @@ def libreoffice_binary() -> str:
 
 
 def convert_pptx_to_pdf(pptx_path: Path, output_dir: Path) -> Path:
-    lo_profile = Path("/tmp/lo_profile_fixed")
-    lo_fonts_dir = lo_profile / "user" / "fonts"
-    lo_fonts_dir.mkdir(parents=True, exist_ok=True)
-
-    # Копируем Circe прямо в профиль LibreOffice — он точно их увидит
-    app_fonts = Path("/app/fonts")
-    if app_fonts.exists():
-        for font_file in app_fonts.iterdir():
-            if font_file.suffix.lower() in (".ttf", ".otf"):
-                dest = lo_fonts_dir / font_file.name
-                if not dest.exists():
-                    shutil.copy2(font_file, dest)
-
+    lo_profile = "/tmp/lo_profile_fixed"
     command = [
         libreoffice_binary(),
         "--headless",
