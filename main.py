@@ -547,8 +547,6 @@ def generate_pdf_zip(template_path: Path, excel_path: Path, user_id: str, case_c
             for shape in slide.shapes:
                 replace_text_in_shape(shape, row, df.columns, case_code)
 
-        substitute_unknown_fonts(prs)
-
         safe_name = sanitize_filename(row[df.columns[0]], fallback=f"presentation_{index + 1}")
         pptx_path = unique_path(user_output_dir, f"{safe_name}.pptx")
         prs.save(str(pptx_path))
