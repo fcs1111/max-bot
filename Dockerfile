@@ -35,9 +35,18 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+
 RUN mkdir -p /usr/local/share/fonts/custom \
-    && if [ -d /app/fonts ]; then cp -r /app/fonts/* /usr/local/share/fonts/custom/ 2>/dev/null || true; fi \
+             /usr/share/fonts/truetype/custom \
+             /root/.fonts \
+    && if [ -d /app/fonts ]; then \
+         cp -r /app/fonts/. /usr/local/share/fonts/custom/; \
+         cp -r /app/fonts/. /usr/share/fonts/truetype/custom/; \
+         cp -r /app/fonts/. /root/.fonts/; \
+       fi \
     && mkdir -p /etc/fonts/conf.d \
+    && cp /app/fontconfig/99-custom-font-fallbacks.conf /etc/fonts/conf.d/ 2>/dev/null || true \
+    && fc-cache -f -v
     && cp /app/fontconfig/99-custom-font-fallbacks.conf /etc/fonts/conf.d/99-custom-font-fallbacks.conf 2>/dev/null || true \
     && fc-cache -f -v
 
