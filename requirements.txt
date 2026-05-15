@@ -1,7 +1,0 @@
-fastapi
-uvicorn[standard]
-requests
-pandas
-openpyxl
-python-pptx
-pymorphy3
