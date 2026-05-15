@@ -525,6 +525,37 @@ def substitute_unknown_fonts(prs: Presentation) -> None:
                 tf.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
                 tf.word_wrap = True
                             
+def generate_pptx_with_replacements(template_path: Path, row: pd.Series, columns, case_code: str, output_path: Path) -> None:
+    """Заменяет текст через python-pptx, но пишет только слайды в оригинальный ZIP.
+    Вся остальная структура (темы, шрифты, лэйауты) берётся из шаблона как есть."""
+    
+    # Используем python-pptx только для замены текста
+    prs = Presentation(str(template_path))
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            replace_text_in_shape(shape, row, columns, case_code)
+    
+    # Получаем изменённые XML только слайдов
+    modified_slides = {}
+    for slide in prs.slides:
+        zip_name = slide.part.partname.lstrip('/')   # e.g. ppt/slides/slide1.xml
+        modified_slides[zip_name] = slide.part.blob  # XML байты только этого слайда
+    
+    # Читаем оригинальный шаблон как ZIP
+    with zipfile.ZipFile(template_path, 'r') as zin:
+        file_contents = {name: zin.read(name) for name in zin.namelist()}
+    
+    # Патчим только слайды, всё остальное оставляем оригинальным
+    for zip_name, xml_bytes in modified_slides.items():
+        if zip_name in file_contents:
+            file_contents[zip_name] = xml_bytes
+    
+    # Пишем новый ZIP
+    with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zout:
+        for name, data in file_contents.items():
+            zout.writestr(name, data)
+
+
 def generate_pdf_zip(template_path: Path, excel_path: Path, user_id: str, case_code: str) -> str:
     user_output_dir = OUTPUT_DIR / sanitize_filename(user_id, fallback="default")
 
@@ -537,21 +568,14 @@ def generate_pdf_zip(template_path: Path, excel_path: Path, user_id: str, case_c
         raise ValueError("Excel пустой. Добавь хотя бы одну строку с данными.")
 
     generated_pdfs = []
-    debug_pptx_files = []
 
     for index, row in df.iterrows():
-        prs = Presentation(str(template_path))
-
-        for slide in prs.slides:
-            for shape in slide.shapes:
-                replace_text_in_shape(shape, row, df.columns, case_code)
-
         safe_name = sanitize_filename(row[df.columns[0]], fallback=f"presentation_{index + 1}")
         pptx_path = unique_path(user_output_dir, f"{safe_name}.pptx")
-        prs.save(str(pptx_path))
-        if INCLUDE_DEBUG_PPTX:
-            debug_pptx_files.append(pptx_path)
-
+        
+        # Патчим ZIP напрямую вместо prs.save()
+        generate_pptx_with_replacements(template_path, row, df.columns, case_code, pptx_path)
+        
         pdf_path = convert_pptx_to_pdf(pptx_path, user_output_dir)
         generated_pdfs.append(pdf_path)
 
@@ -561,11 +585,8 @@ def generate_pdf_zip(template_path: Path, excel_path: Path, user_id: str, case_c
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
         for file in generated_pdfs:
             zipf.write(file, arcname=file.name)
-        for file in debug_pptx_files:
-            zipf.write(file, arcname=f"debug_pptx/{file.name}")
 
     return zip_name
-
 
 # ------------------ MAX API HELPERS ------------------
 
