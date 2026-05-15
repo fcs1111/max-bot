@@ -471,14 +471,26 @@ def libreoffice_binary() -> str:
 
 
 def convert_pptx_to_pdf(pptx_path: Path, output_dir: Path) -> Path:
-    lo_profile = f"/tmp/lo_profile_{os.getpid()}"
+    lo_profile = Path("/tmp/lo_profile_fixed")
+    lo_fonts_dir = lo_profile / "user" / "fonts"
+    lo_fonts_dir.mkdir(parents=True, exist_ok=True)
+
+    # Копируем Circe прямо в профиль LibreOffice — он точно их увидит
+    app_fonts = Path("/app/fonts")
+    if app_fonts.exists():
+        for font_file in app_fonts.iterdir():
+            if font_file.suffix.lower() in (".ttf", ".otf"):
+                dest = lo_fonts_dir / font_file.name
+                if not dest.exists():
+                    shutil.copy2(font_file, dest)
+
     command = [
         libreoffice_binary(),
         "--headless",
         "--norestore",
         "--nofirststartwizard",
         f"-env:UserInstallation=file://{lo_profile}",
-        "--convert-to", "pdf:impress_pdf_Export",   # ← явно указываем фильтр Impress
+        "--convert-to", "pdf:impress_pdf_Export",
         "--outdir", str(output_dir),
         str(pptx_path),
     ]
@@ -488,11 +500,11 @@ def convert_pptx_to_pdf(pptx_path: Path, output_dir: Path) -> Path:
 
     result = subprocess.run(command, capture_output=True, text=True, timeout=180, env=env)
     if result.returncode != 0:
-        raise RuntimeError(f"LibreOffice не смог сделать PDF:\n{result.stderr or result.stdout}")
+        raise RuntimeError(f"LibreOffice error:\n{result.stderr or result.stdout}")
 
     pdf_path = output_dir / f"{pptx_path.stem}.pdf"
     if not pdf_path.exists():
-        raise RuntimeError("PDF не появился после конвертации. Проверь логи Railway.")
+        raise RuntimeError("PDF не появился после конвертации.")
     return pdf_path
 
 from pptx.enum.text import MSO_AUTO_SIZE
