@@ -1168,3 +1168,24 @@ def debug_inflect(fio: str, case: str = "datv"):
     if case not in CASES:
         return f"Неизвестный падеж: {case}"
     return inflect_fio(fio, case)
+
+@app.get("/debug_fonts", response_class=PlainTextResponse)
+def debug_fonts():
+    import subprocess
+    lines = []
+    
+    # Что видит система
+    fc = subprocess.run(["fc-list"], capture_output=True, text=True)
+    circe_lines = [l for l in fc.stdout.splitlines() if "irce" in l]
+    lines.append(f"=== Circe в fc-list ({len(circe_lines)} шт) ===")
+    lines.extend(circe_lines or ["НЕ НАЙДЕН"])
+    
+    # Что есть в папке /app/fonts
+    lines.append("\n=== /app/fonts ===")
+    p = Path("/app/fonts")
+    if p.exists():
+        lines.extend(str(f) for f in p.iterdir())
+    else:
+        lines.append("ПАПКА НЕ СУЩЕСТВУЕТ")
+    
+    return "\n".join(lines)
