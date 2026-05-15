@@ -587,7 +587,6 @@ def generate_pdf_zip(template_path: Path, excel_path: Path, user_id: str, case_c
             zipf.write(file, arcname=file.name)
 
     return zip_name
-
 # ------------------ MAX API HELPERS ------------------
 
 def max_headers() -> dict:
