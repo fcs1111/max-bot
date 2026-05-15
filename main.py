@@ -600,7 +600,6 @@ def generate_pptx_with_replacements(template_path: Path, row: pd.Series, columns
 
 def generate_pdf_zip(template_path: Path, excel_path: Path, user_id: str, case_code: str) -> str:
     user_output_dir = OUTPUT_DIR / sanitize_filename(user_id, fallback="default")
-
     if user_output_dir.exists():
         shutil.rmtree(user_output_dir)
     user_output_dir.mkdir(exist_ok=True)
@@ -609,26 +608,94 @@ def generate_pdf_zip(template_path: Path, excel_path: Path, user_id: str, case_c
     if df.empty:
         raise ValueError("Excel пустой. Добавь хотя бы одну строку с данными.")
 
-    generated_pdfs = []
+    # Читаем шаблон как ZIP один раз
+    with zipfile.ZipFile(template_path, 'r') as zin:
+        template_contents = {name: zin.read(name) for name in zin.namelist()}
 
+    # Получаем список слайдов из шаблона
+    slide_files = sorted([n for n in template_contents if re.match(r'ppt/slides/slide\d+\.xml$', n)])
+
+    # Строим один большой PPTX со всеми фамилиями
+    all_slide_xmls = []
+    names = []
     for index, row in df.iterrows():
-        safe_name = sanitize_filename(row[df.columns[0]], fallback=f"presentation_{index + 1}")
-        pptx_path = unique_path(user_output_dir, f"{safe_name}.pptx")
-        
-        # Патчим ZIP напрямую вместо prs.save()
-        generate_pptx_with_replacements(template_path, row, df.columns, case_code, pptx_path)
-        
-        pdf_path = convert_pptx_to_pdf(pptx_path, user_output_dir)
-        generated_pdfs.append(pdf_path)
+        replacements = build_replacements(row, df.columns, case_code)
+        slide_xml = replace_in_slide_xml(template_contents[slide_files[0]], replacements)
+        all_slide_xmls.append(slide_xml)
+        names.append(sanitize_filename(row[df.columns[0]], fallback=f"slide_{index+1}"))
 
-    zip_name = f"{sanitize_filename(user_id, fallback='default')}_result.zip"
-    zip_path = OUTPUT_DIR / zip_name
+    # Собираем PPTX с нужным количеством слайдов
+    combined_pptx = user_output_dir / "combined.pptx"
+    new_contents = dict(template_contents)
 
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-        for file in generated_pdfs:
-            zipf.write(file, arcname=file.name)
+    # Дублируем слайды и rels под каждую строку
+    rels_template_key = slide_files[0].replace('slides/slide', 'slides/_rels/slide').replace('.xml', '.xml.rels')
+    slide_rels_template = template_contents.get(rels_template_key, b'')
 
-    return zip_name
+    # Обновляем presentation.xml чтобы добавить слайды
+    prs_xml = template_contents.get('ppt/presentation.xml', b'').decode('utf-8')
+
+    # Удаляем старые слайды из contents
+    old_slide_keys = [k for k in new_contents if re.match(r'ppt/slides/slide\d+\.xml', k) or
+                      re.match(r'ppt/slides/_rels/slide\d+\.xml\.rels', k)]
+    for k in old_slide_keys:
+        del new_contents[k]
+
+    # Добавляем новые слайды
+    for i, slide_xml in enumerate(all_slide_xmls, start=1):
+        new_contents[f'ppt/slides/slide{i}.xml'] = slide_xml
+        new_contents[f'ppt/slides/_rels/slide{i}.xml.rels'] = slide_rels_template
+
+    # Обновляем sldIdLst в presentation.xml
+    slide_ids = ''.join(
+        f'<p:sldId id="{256+i}" r:id="rId{10+i}"/>'
+        for i in range(len(all_slide_xmls))
+    )
+    prs_xml = re.sub(r'<p:sldIdLst>.*?</p:sldIdLst>',
+                     f'<p:sldIdLst>{slide_ids}</p:sldIdLst>',
+                     prs_xml, flags=re.DOTALL)
+    new_contents['ppt/presentation.xml'] = prs_xml.encode('utf-8')
+
+    # Обновляем _rels/presentation.xml.rels
+    prs_rels = template_contents.get('ppt/_rels/presentation.xml.rels', b'').decode('utf-8')
+    # Убираем старые ссылки на слайды
+    prs_rels = re.sub(r'<Relationship[^/]*/slides/slide[^/]*\.xml[^/]*/>', '', prs_rels)
+    slide_rels = ''.join(
+        f'<Relationship Id="rId{10+i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide{i+1}.xml"/>'
+        for i in range(len(all_slide_xmls))
+    )
+    prs_rels = prs_rels.replace('</Relationships>', f'{slide_rels}</Relationships>')
+    new_contents['ppt/_rels/presentation.xml.rels'] = prs_rels.encode('utf-8')
+
+    with zipfile.ZipFile(combined_pptx, 'w', zipfile.ZIP_DEFLATED) as zout:
+        for name, data in new_contents.items():
+            zout.writestr(name, data)
+
+    # Одна конвертация на весь batch
+    combined_pdf = convert_pptx_to_pdf(combined_pptx, user_output_dir)
+
+    # Разбиваем PDF на отдельные страницы
+    try:
+        import pypdf
+        reader = pypdf.PdfReader(str(combined_pdf))
+        zip_name = f"{sanitize_filename(user_id, fallback='default')}_result.zip"
+        zip_path = OUTPUT_DIR / zip_name
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+            for i, page in enumerate(reader.pages):
+                writer = pypdf.PdfWriter()
+                writer.add_page(page)
+                page_path = user_output_dir / f"{names[i]}.pdf"
+                with open(page_path, 'wb') as f:
+                    writer.write(f)
+                zipf.write(page_path, arcname=f"{names[i]}.pdf")
+        return zip_name
+    except ImportError:
+        # Если pypdf не установлен — отдаём один общий PDF
+        zip_name = f"{sanitize_filename(user_id, fallback='default')}_result.zip"
+        zip_path = OUTPUT_DIR / zip_name
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+            zipf.write(combined_pdf, arcname="all_gramoty.pdf")
+        return zip_name
 # ------------------ MAX API HELPERS ------------------
 
 def max_headers() -> dict:
