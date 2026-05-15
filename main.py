@@ -496,7 +496,28 @@ def convert_pptx_to_pdf(pptx_path: Path, output_dir: Path) -> Path:
         raise RuntimeError("PDF не появился после конвертации. Проверь логи Railway.")
     return pdf_path
 
+KNOWN_SYSTEM_FONTS = {
+    "liberation sans", "liberation serif", "liberation mono",
+    "dejavu sans", "dejavu serif", "noto sans", "noto serif",
+    "lato", "open sans", "roboto", "montserrat", "pt sans", "pt serif",
+    "arial", "times new roman", "courier new", "calibri",
+}
+FALLBACK_FONT = "Liberation Sans"
 
+def substitute_unknown_fonts(prs: Presentation) -> None:
+    """Заменяет шрифты, которых нет на сервере, на системный — чтобы LibreOffice не ломал вёрстку."""
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            if not shape.has_text_frame:
+                continue
+            for paragraph in shape.text_frame.paragraphs:
+                # Шрифт на уровне параграфа
+                if paragraph.runs:
+                    for run in paragraph.runs:
+                        font_name = (run.font.name or "").strip()
+                        if font_name and font_name.lower() not in KNOWN_SYSTEM_FONTS:
+                            run.font.name = FALLBACK_FONT
+                            
 def generate_pdf_zip(template_path: Path, excel_path: Path, user_id: str, case_code: str) -> str:
     user_output_dir = OUTPUT_DIR / sanitize_filename(user_id, fallback="default")
 
@@ -517,6 +538,8 @@ def generate_pdf_zip(template_path: Path, excel_path: Path, user_id: str, case_c
         for slide in prs.slides:
             for shape in slide.shapes:
                 replace_text_in_shape(shape, row, df.columns, case_code)
+
+        substitute_unknown_fonts(prs)
 
         safe_name = sanitize_filename(row[df.columns[0]], fallback=f"presentation_{index + 1}")
         pptx_path = unique_path(user_output_dir, f"{safe_name}.pptx")
