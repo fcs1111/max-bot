@@ -1189,3 +1189,35 @@ def debug_fonts():
         lines.append("ПАПКА НЕ СУЩЕСТВУЕТ")
     
     return "\n".join(lines)
+
+@app.get("/debug_lo_fonts", response_class=PlainTextResponse)
+def debug_lo_fonts():
+    import subprocess
+    lines = []
+    
+    # Где реально лежит LibreOffice
+    lo = shutil.which("libreoffice") or shutil.which("soffice") or "не найден"
+    lines.append(f"LibreOffice: {lo}")
+    
+    # Папка шрифтов внутри LibreOffice
+    lo_font_dirs = [
+        "/usr/lib/libreoffice/share/fonts/truetype",
+        "/usr/lib64/libreoffice/share/fonts/truetype",
+        "/opt/libreoffice/share/fonts/truetype",
+    ]
+    for d in lo_font_dirs:
+        p = Path(d)
+        if p.exists():
+            files = list(p.rglob("*.ttf"))
+            circe = [f for f in files if "irce" in f.name]
+            lines.append(f"\n=== {d} (всего ttf: {len(files)}) ===")
+            lines.append(f"Circe в этой папке: {circe or 'НЕТ'}")
+    
+    # Проверяем реальный путь установки LO
+    result = subprocess.run(["find", "/usr", "-name", "*.ttf", "-path", "*libreoffice*"], 
+                           capture_output=True, text=True)
+    lo_ttfs = [l for l in result.stdout.splitlines() if "irce" in l]
+    lines.append(f"\n=== Circe внутри LO (find) ===")
+    lines.extend(lo_ttfs or ["НЕ НАЙДЕН"])
+    
+    return "\n".join(lines)
