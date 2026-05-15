@@ -471,7 +471,6 @@ def libreoffice_binary() -> str:
 
 
 def convert_pptx_to_pdf(pptx_path: Path, output_dir: Path) -> Path:
-    # Каждому процессу свой профиль, чтобы не было конфликтов при параллельных запросах
     lo_profile = f"/tmp/lo_profile_{os.getpid()}"
     command = [
         libreoffice_binary(),
@@ -479,12 +478,12 @@ def convert_pptx_to_pdf(pptx_path: Path, output_dir: Path) -> Path:
         "--norestore",
         "--nofirststartwizard",
         f"-env:UserInstallation=file://{lo_profile}",
-        "--convert-to", "pdf",
+        "--convert-to", "pdf:impress_pdf_Export",   # ← явно указываем фильтр Impress
         "--outdir", str(output_dir),
         str(pptx_path),
     ]
     env = os.environ.copy()
-    env["HOME"] = "/tmp"          # LibreOffice требует HOME
+    env["HOME"] = "/tmp"
     env["TMPDIR"] = "/tmp"
 
     result = subprocess.run(command, capture_output=True, text=True, timeout=180, env=env)
