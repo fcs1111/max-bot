@@ -537,32 +537,40 @@ def substitute_unknown_fonts(prs: Presentation) -> None:
                 tf.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
                 tf.word_wrap = True
                             
+import re
+
+def replace_in_slide_xml(xml_bytes: bytes, replacements: list[tuple[str, str]]) -> bytes:
+    """Заменяет плейсхолдеры прямо в сыром XML — ничего больше не трогает."""
+    xml = xml_bytes.decode("utf-8")
+    
+    for placeholder, value in replacements:
+        # Плейсхолдер может быть разбит тегами XML, собираем его
+        # Сначала пробуем простую замену
+        if placeholder in xml:
+            xml = xml.replace(placeholder, value)
+            continue
+        
+        # Если разбит тегами — склеиваем через regex
+        # %ФИО% может выглядеть как >%<тег/>ФИО<тег/>%
+        escaped = re.escape(placeholder)
+        # Разрешаем XML-теги между символами плейсхолдера
+        pattern = re.sub(r'([^%A-Za-zА-Яа-я])', r'\1(?:<[^>]+>)*', escaped)
+        xml = re.sub(pattern, value, xml)
+    
+    return xml.encode("utf-8")
+
+
 def generate_pptx_with_replacements(template_path: Path, row: pd.Series, columns, case_code: str, output_path: Path) -> None:
-    """Заменяет текст через python-pptx, но пишет только слайды в оригинальный ZIP.
-    Вся остальная структура (темы, шрифты, лэйауты) берётся из шаблона как есть."""
+    replacements = build_replacements(row, columns, case_code)
     
-    # Используем python-pptx только для замены текста
-    prs = Presentation(str(template_path))
-    for slide in prs.slides:
-        for shape in slide.shapes:
-            replace_text_in_shape(shape, row, columns, case_code)
-    
-    # Получаем изменённые XML только слайдов
-    modified_slides = {}
-    for slide in prs.slides:
-        zip_name = slide.part.partname.lstrip('/')   # e.g. ppt/slides/slide1.xml
-        modified_slides[zip_name] = slide.part.blob  # XML байты только этого слайда
-    
-    # Читаем оригинальный шаблон как ZIP
     with zipfile.ZipFile(template_path, 'r') as zin:
         file_contents = {name: zin.read(name) for name in zin.namelist()}
     
-    # Патчим только слайды, всё остальное оставляем оригинальным
-    for zip_name, xml_bytes in modified_slides.items():
-        if zip_name in file_contents:
-            file_contents[zip_name] = xml_bytes
+    # Трогаем ТОЛЬКО XML слайдов, всё остальное — как есть
+    for name in file_contents:
+        if re.match(r'ppt/slides/slide\d+\.xml$', name):
+            file_contents[name] = replace_in_slide_xml(file_contents[name], replacements)
     
-    # Пишем новый ZIP
     with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zout:
         for name, data in file_contents.items():
             zout.writestr(name, data)
